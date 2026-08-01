@@ -1,0 +1,108 @@
+name: tests
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    name: pytest (pure logic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest
+      # mathutils-dependent tests self-skip under a plain interpreter;
+      # the numeric-input and persistence logic runs everywhere.
+      - run: python -m pytest -q
+
+  blender:
+    name: Blender ${{ matrix.series }} headless battery (Linux)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        series: ["4.5", "5.1"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve newest ${{ matrix.series }} Linux build
+        id: resolve
+        run: |
+          NAME=$(curl -fsSL "https://download.blender.org/release/Blender${{ matrix.series }}/" \
+            | grep -oE 'blender-${{ matrix.series }}\.[0-9]+-linux-x64\.tar\.xz' \
+            | sort -uV | tail -1)
+          test -n "$NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "Resolved: $NAME"
+
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: ~/blender.tar.xz
+          key: ${{ steps.resolve.outputs.name }}
+
+      - name: Download Blender
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o ~/blender.tar.xz \
+            "https://download.blender.org/release/Blender${{ matrix.series }}/${{ steps.resolve.outputs.name }}"
+
+      - name: Install runtime libraries + unpack
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq libx11-6 libxi6 libxxf86vm1 libxfixes3 \
+            libxrender1 libxinerama1 libgl1 libegl1 libglu1-mesa libsm6 \
+            libxkbcommon0
+          mkdir -p "$HOME/blender"
+          tar -xf ~/blender.tar.xz -C "$HOME/blender" --strip-components=1
+          "$HOME/blender/blender" --version
+
+      - name: Integration battery (20 suites)
+        run: |
+          # The runner shell is bash -e: a bare out=$(failing-cmd) aborts the
+          # step BEFORE the loop can print the failure diagnostics. The loop
+          # inspects exit codes itself, so opt out and control the step
+          # status with the final check.
+          set +e
+          BLENDER="$HOME/blender/blender"
+          # Every suite prints "<NAME>: OK" as its last line and exits 0.
+          # Both halves matter: an uncaught exception in a --python script
+          # exits Blender 0, so the ": OK" marker catches silent crashes.
+          SUITES="fill_parity anchor_stability cut_selected_only
+                  keymap_bindings repair_selection status_legend redo_pose
+                  edge_warnings crash_recovery pose_persistence
+                  multi_object_cut numeric_units mirror_cut pose_undo
+                  handler_leak rotate_handover mirror_ghosts
+                  watchdog_windows save_roundtrip hidpi_scaling
+                  move_stability"
+          fails=0
+          for t in $SUITES; do
+            out=$("$BLENDER" --background --factory-startup \
+                  --python-exit-code 1 --python "tests/integration/$t.py" 2>&1)
+            code=$?
+            if [ $code -ne 0 ] || ! printf '%s' "$out" | grep -q ": OK"; then
+              fails=$((fails+1))
+              echo "::error::FAILED: $t (exit $code)"
+              printf '%s\n' "$out" | tail -40
+            else
+              printf '%s\n' "$out" | grep ": OK"
+            fi
+          done
+          [ "$fails" -eq 0 ]
+
+      - name: Soak (1000 ops, fixed seed)
+        run: |
+          code=0
+          out=$("$HOME/blender/blender" --background --factory-startup \
+                --python-exit-code 1 --python tests/integration/soak.py -- 1000 1 2>&1) || code=$?
+          printf '%s\n' "$out" | grep -E '\[SOAK\]' || true
+          if [ $code -ne 0 ]; then
+            echo "::error::soak failed (exit $code)"
+            printf '%s\n' "$out" | tail -40
+            exit 1
+          fi
+          printf '%s' "$out" | grep -q '\[SOAK\] PASS'

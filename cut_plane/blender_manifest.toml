@@ -1,0 +1,26 @@
+schema_version = "1.0.0"
+
+id = "cut_plane"
+version = "1.0.0"
+name = "Cut Plane"
+tagline = "Cut a mesh with a positionable plane (live preview)"
+maintainer = "Firg <firgcg@gmail.com>"
+type = "add-on"
+website = "https://github.com/firg659-del/cut-plane"
+
+blender_version_min = "4.5.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+copyright = [
+  "2026 Firg",
+]
+
+tags = ["3D View", "Mesh"]
+
+# The numeric-input field supports Ctrl+C / Ctrl+V via wm.clipboard -
+# every clipboard access must be declared (extensions.blender.org policy).
+[permissions]
+clipboard = "Copy and paste values in the numeric input field"
