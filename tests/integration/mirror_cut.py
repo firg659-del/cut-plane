@@ -68,8 +68,11 @@ sc = bpy.context.window_manager.cut_plane
 sc.mirror_x = sc.mirror_y = sc.mirror_z = False
 
 # --- 1. the pure expansion helper -------------------------------------------
-# Off-axis on every component, or reflections coincide and dedupe (below)
-co, no = Vector((0.5, 0.2, 0.3)), Vector((1.0, 0.0, 0.0))
+# OBLIQUE on every component. An axis-aligned normal is reflected onto the
+# SAME geometric plane by the two mirrors perpendicular to it (sliding an
+# infinite plane within itself does not move the cut), so it expands to
+# fewer distinct cuts - see mirror_self_reflection.py.
+co, no = Vector((0.5, 0.2, 0.3)), Vector((1.0, 0.7, 0.4)).normalized()
 check("no axes -> 1 plane", len(cutting._mirrored_planes_local(co, no, ())) == 1)
 check("one axis -> 2 planes",
       len(cutting._mirrored_planes_local(co, no, (0,))) == 2)

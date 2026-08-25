@@ -9,7 +9,7 @@
 A Blender Edit Mode tool. Position a plane with a gizmo; the mesh is bisected
 along it and redrawn on every change. `Enter` commits the cut.
 
-Requires Blender 4.5 or newer. Tested through 5.1.
+Requires Blender 4.5 or newer.
 
 ---
 
@@ -80,6 +80,9 @@ It is also in the **Mesh** menu and in `F3` search.
 
 The plane appears at the mesh centre, already previewing. Position it, set the
 options in the header row, press `Enter`.
+
+The tool stays active after a cut, so you can move the plane and cut again -
+each cut applies to the result of the last one, and each is its own undo step.
 
 | Keys | Action |
 |---|---|

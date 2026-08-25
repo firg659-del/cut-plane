@@ -11,7 +11,7 @@ Requires **Blender 4.5 or newer** (tested through 5.1).
 ## Install
 
 1. In Blender: **Edit → Preferences → Get Extensions → Install from Disk…**
-   and pick the downloaded `cut_plane-1.0.0.zip`
+   and pick the downloaded `cut_plane-1.0.1.zip`
    (or simply drag the zip into the Blender window).
 2. That's it — the extension enables itself.
 

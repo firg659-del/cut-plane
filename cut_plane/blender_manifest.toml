@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "cut_plane"
-version = "1.0.0"
+version = "1.0.1"
 name = "Cut Plane"
 tagline = "Cut a mesh with a positionable plane (live preview)"
 maintainer = "Firg <firgcg@gmail.com>"

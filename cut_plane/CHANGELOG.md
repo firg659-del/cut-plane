@@ -3,6 +3,16 @@
 User-facing changes to Cut Plane. Versions match `blender_manifest.toml`;
 entries are written to be paste-ready for store update notes.
 
+## 1.0.1 — 2026-08-25
+Bug fix.
+- **Mirror no longer deletes the mesh.** A plane that a mirror
+  reflects onto ITSELF was expanded into two cuts of the same
+  plane facing opposite ways, so Clear Inner or Clear Outer
+  removed both sides and the mesh vanished. This was the default
+  state - the plane starts at the mesh centre, which on a fresh
+  object is the origin - so Mirror Z plus a Clear emptied it.
+  Fill capped such a cut twice, leaving coincident faces.
+
 ## 1.0.0 — 2026-07-22
 Initial public release.
 - Live destructive cut preview: Fill, Clear Inner, Clear Outer — see the

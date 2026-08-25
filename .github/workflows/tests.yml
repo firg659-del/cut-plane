@@ -78,7 +78,7 @@ jobs:
                   multi_object_cut numeric_units mirror_cut pose_undo
                   handler_leak rotate_handover mirror_ghosts
                   watchdog_windows save_roundtrip hidpi_scaling
-                  move_stability"
+                  move_stability mirror_self_reflection"
           fails=0
           for t in $SUITES; do
             out=$("$BLENDER" --background --factory-startup \

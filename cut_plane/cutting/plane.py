@@ -67,11 +67,12 @@ def _mirrored_planes_local(co_l: Vector, no_l: Vector, axes) -> list:
     modifier semantics, and the natural spot in the pipeline: both cut paths
     already converted the world plane to object-local space, where a
     reflection is two sign flips. Each enabled axis doubles the set (X+Y =
-    4 planes, X+Y+Z = 8). Deduped by the quantized plane key: a plane lying
-    ON a mirror axis reflects onto itself and cutting it twice would
-    double-cut. The normal's SIGN stays part of the key on purpose - an
-    opposite-facing twin is a DIFFERENT cut (its Clear side points the
-    other way, exactly what a mirrored Clear must do).
+    4 planes, X+Y+Z = 8). Deduped by the GEOMETRIC
+    plane (_coincident_plane_key): a plane that reflects onto itself must
+    cut ONCE. An opposite-facing twin somewhere ELSE is still a different
+    cut - its Clear side points the other way, exactly what a mirrored
+    Clear must do - and it survives, because it sits at a different
+    offset.
 
     The mirrors are derived from the one real plane at cut time - never
     stored state, so undo/F9/persistence know nothing new.
@@ -85,11 +86,37 @@ def _mirrored_planes_local(co_l: Vector, no_l: Vector, axes) -> list:
             planes.append((mco, mno))
     out, seen = [], set()
     for co, no in planes:
-        k = _plane_key(co, no)
+        k = _coincident_plane_key(co, no)
         if k not in seen:
             seen.add(k)
             out.append((co, no))
     return out
+
+
+def _coincident_plane_key(co: Vector, no: Vector) -> tuple:
+    """Dedup key for the mirror expansion: the GEOMETRIC plane, orientation
+    ignored.
+
+    Deliberately NOT _plane_key, which keeps the normal's sign because the
+    preview must re-run when a flip changes which side Clear removes. Here
+    the sign must NOT separate: a plane that mirrors onto itself comes back
+    as the same geometry with a reversed normal, and cutting it twice makes
+    Clear delete BOTH sides - their union is the whole mesh. That is the
+    DEFAULT state, not an exotic one: the plane spawns at the mesh centre
+    with a Z normal, and on a fresh primitive that is the object origin.
+
+    Genuinely different planes still differ here - the offset d = co.n
+    separates them.
+    """
+    n = no.normalized() if no.length_squared > 0.0 else no.copy()
+    d = co.dot(n)
+    for c in n:                     # canonical orientation: make the first
+        if abs(c) > 1e-9:           # significant component positive
+            if c < 0.0:
+                n = -n
+                d = -d
+            break
+    return (round(n.x, 5), round(n.y, 5), round(n.z, 5), round(d, 5))
 
 
 def _plane_key(plane_co: Vector, plane_no: Vector) -> tuple:
