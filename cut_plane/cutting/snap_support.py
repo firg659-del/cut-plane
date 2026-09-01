@@ -11,7 +11,7 @@ from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 from ..lib.constants import on_internal_error
-from ..lib.math_utils import default_center_offset
+from ..lib.math_utils import anchor_center_offset, default_center_offset
 from .snapshot import _snapshot_bounds, _snapshot_valid
 from .state import _session_for
 
@@ -47,7 +47,7 @@ def get_live_snapshot_mesh(obj):
     return cache.live_snapshot
 
 
-def baseline_center_offset(obj) -> Vector:
+def baseline_center_offset(obj, anchor: str = 'BBOX') -> Vector:
     """center_offset placing the plane at the BASELINE mesh's bbox center.
 
     Reset-to-center must aim at the UNCUT geometry. obj.bound_box is the
@@ -58,6 +58,10 @@ def baseline_center_offset(obj) -> Vector:
     never the true center. The snapshot IS the uncut mesh; without a
     session the live box is the baseline and the plain helper serves.
     """
+    if anchor != 'BBOX':
+        # ORIGIN and CURSOR do not depend on the mesh at all, so the
+        # evaluated-vs-baseline distinction below simply does not apply.
+        return anchor_center_offset(obj, anchor)
     snap = get_live_snapshot_mesh(obj)
     if snap is None or not snap.vertices:
         return default_center_offset(obj)

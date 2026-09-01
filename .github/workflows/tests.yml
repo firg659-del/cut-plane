@@ -2,7 +2,9 @@ name: tests
 
 on:
   push:
-    branches: [main, master]
+    # ci-** exists so a branch can be put through the full battery without
+    # touching main or shipping anything.
+    branches: [main, master, 'ci-**']
   workflow_dispatch:
 
 jobs:
@@ -20,21 +22,30 @@ jobs:
       - run: python -m pytest -q
 
   blender:
-    name: Blender ${{ matrix.series }} headless battery (Linux)
-    runs-on: ubuntu-latest
+    name: Blender ${{ matrix.series }} headless battery (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        series: ["4.5", "5.1"]
+        include:
+          - { os: ubuntu-latest, label: Linux, series: "4.5" }
+          - { os: ubuntu-latest, label: Linux, series: "5.1" }
+          - { os: macos-latest,  label: macOS, series: "4.5" }
+          - { os: macos-latest,  label: macOS, series: "5.1" }
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve newest ${{ matrix.series }} Linux build
+      - name: Resolve newest ${{ matrix.series }} ${{ matrix.label }} build
         id: resolve
         run: |
+          # macOS is published as a .dmg only, and the runners are arm64.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            PATTERN='blender-${{ matrix.series }}\.[0-9]+-macos-arm64\.dmg'
+          else
+            PATTERN='blender-${{ matrix.series }}\.[0-9]+-linux-x64\.tar\.xz'
+          fi
           NAME=$(curl -fsSL "https://download.blender.org/release/Blender${{ matrix.series }}/" \
-            | grep -oE 'blender-${{ matrix.series }}\.[0-9]+-linux-x64\.tar\.xz' \
-            | sort -uV | tail -1)
+            | grep -oE "$PATTERN" | sort -uV | tail -1)
           test -n "$NAME"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "Resolved: $NAME"
@@ -42,43 +53,65 @@ jobs:
       - uses: actions/cache@v4
         id: cache
         with:
-          path: ~/blender.tar.xz
+          path: ~/blender-archive
           key: ${{ steps.resolve.outputs.name }}
 
       - name: Download Blender
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          curl -fsSL -o ~/blender.tar.xz \
+          curl -fsSL -o ~/blender-archive \
             "https://download.blender.org/release/Blender${{ matrix.series }}/${{ steps.resolve.outputs.name }}"
 
-      - name: Install runtime libraries + unpack
+      - name: Install Blender (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
           sudo apt-get install -yq libx11-6 libxi6 libxxf86vm1 libxfixes3 \
             libxrender1 libxinerama1 libgl1 libegl1 libglu1-mesa libsm6 \
             libxkbcommon0
           mkdir -p "$HOME/blender"
-          tar -xf ~/blender.tar.xz -C "$HOME/blender" --strip-components=1
-          "$HOME/blender/blender" --version
+          tar -xf ~/blender-archive -C "$HOME/blender" --strip-components=1
+          echo "BLENDER_BIN=$HOME/blender/blender" >> "$GITHUB_ENV"
 
-      - name: Integration battery (20 suites)
+      - name: Install Blender (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # Mount the .dmg, copy the app off the read-only volume, detach.
+          MNT=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" ~/blender-archive
+          mkdir -p "$HOME/blender"
+          cp -R "$MNT/Blender.app" "$HOME/blender/"
+          hdiutil detach "$MNT" -quiet
+          # A downloaded app carries the quarantine flag; without stripping it
+          # Gatekeeper refuses to launch and every suite would "fail".
+          xattr -dr com.apple.quarantine "$HOME/blender/Blender.app" || true
+          echo "BLENDER_BIN=$HOME/blender/Blender.app/Contents/MacOS/Blender" >> "$GITHUB_ENV"
+
+      - name: Blender version
+        run: |
+          "$BLENDER_BIN" --version
+
+      - name: Integration battery
         run: |
           # The runner shell is bash -e: a bare out=$(failing-cmd) aborts the
           # step BEFORE the loop can print the failure diagnostics. The loop
           # inspects exit codes itself, so opt out and control the step
           # status with the final check.
           set +e
-          BLENDER="$HOME/blender/blender"
+          BLENDER="$BLENDER_BIN"
           # Every suite prints "<NAME>: OK" as its last line and exits 0.
           # Both halves matter: an uncaught exception in a --python script
           # exits Blender 0, so the ": OK" marker catches silent crashes.
+          # ADD NEW SUITES HERE - this list is by name, so a new file is
+          # invisible to CI until it appears in it.
           SUITES="fill_parity anchor_stability cut_selected_only
                   keymap_bindings repair_selection status_legend redo_pose
                   edge_warnings crash_recovery pose_persistence
                   multi_object_cut numeric_units mirror_cut pose_undo
                   handler_leak rotate_handover mirror_ghosts
                   watchdog_windows save_roundtrip hidpi_scaling
-                  move_stability mirror_self_reflection"
+                  move_stability mirror_self_reflection mirror_hint
+                  plane_anchor"
           fails=0
           for t in $SUITES; do
             out=$("$BLENDER" --background --factory-startup \
@@ -87,6 +120,13 @@ jobs:
             if [ $code -ne 0 ] || ! printf '%s' "$out" | grep -q ": OK"; then
               fails=$((fails+1))
               echo "::error::FAILED: $t (exit $code)"
+              # Surface each failed CHECK as an annotation too. Job logs
+              # need authentication even on a public repo; annotations do
+              # not, so a failure stays diagnosable from the API alone -
+              # which matters most on a platform nobody has a machine for.
+              echo "$out" | grep -E '^.FAIL' | while IFS= read -r line; do
+                echo "::error::$t: $line"
+              done
               printf '%s\n' "$out" | tail -40
             else
               printf '%s\n' "$out" | grep ": OK"
@@ -97,7 +137,7 @@ jobs:
       - name: Soak (1000 ops, fixed seed)
         run: |
           code=0
-          out=$("$HOME/blender/blender" --background --factory-startup \
+          out=$("$BLENDER_BIN" --background --factory-startup \
                 --python-exit-code 1 --python tests/integration/soak.py -- 1000 1 2>&1) || code=$?
           printf '%s\n' "$out" | grep -E '\[SOAK\]' || true
           if [ $code -ne 0 ]; then

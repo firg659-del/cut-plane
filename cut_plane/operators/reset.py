@@ -95,7 +95,7 @@ class CutPlaneResetOperator(Operator):
             # surviving half's center on every press (measured: each Alt+G
             # halved the distance to the top face, never reaching center).
             props.center_offset = cutting.baseline_center_offset(
-                context.edit_object)
+                context.edit_object, props.plane_anchor)
 
         if do_all or self.mode == 'SCALE':
             props.x_scale = 1.0

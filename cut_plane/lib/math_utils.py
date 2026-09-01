@@ -174,6 +174,34 @@ def get_plane_pose(context) -> Optional[Tuple[Vector, Matrix]]:
     return position, rotation
 
 
+def anchor_world(obj, mode: str = 'BBOX', context=None) -> Vector:
+    """World point the plane centres on and the mirrors reflect through.
+
+    ONE reference for both. Before this they disagreed - placement used the
+    bounding box, Mirror used the origin - so a mirrored cut on an
+    off-origin mesh landed 2 x (bbox centre - origin) away from where it
+    belonged, often outside the geometry entirely.
+    """
+    if obj is None:
+        return Vector((0.0, 0.0, 0.0))
+    if mode == 'CURSOR':
+        scene = getattr(context or bpy.context, 'scene', None)
+        if scene is not None:
+            return Vector(scene.cursor.location)
+        return obj.matrix_world.translation.copy()      # no scene: fall back
+    if mode == 'BBOX' and getattr(obj, 'type', None) == 'MESH':
+        corners = [Vector(c) for c in obj.bound_box]
+        return obj.matrix_world @ (sum(corners, Vector()) / 8.0)
+    return obj.matrix_world.translation.copy()          # ORIGIN
+
+
+def anchor_center_offset(obj, mode: str = 'BBOX', context=None) -> Vector:
+    """The center_offset that places a fresh plane ON the anchor."""
+    if obj is None or obj.type != 'MESH':
+        return Vector((0.0, 0.0, 0.0))
+    return anchor_world(obj, mode, context) - obj.matrix_world.translation
+
+
 def default_center_offset(obj) -> Vector:
     """The center_offset that places a fresh plane at the mesh BBOX CENTER.
 

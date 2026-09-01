@@ -184,6 +184,7 @@ class _FakeCutOp:
     selected_only = False
     select_loop = True
     mirror_x = mirror_y = mirror_z = False
+    plane_anchor = 'BBOX'
     _bisect_object = CutPlaneCutOperator._bisect_object
 
     def report(self, *_a):

@@ -329,16 +329,15 @@ def _mirror_ghosts_wanted(context) -> bool:
 def _draw_mirror_ghosts(context) -> None:
     """Dim outline copies of the plane at its mirrored positions.
 
-    Mirrors reflect across each object's local axes through its origin - the
-    same Mirror-modifier semantics the cut uses
-    (cutting._mirrored_planes_local) - so the ghosts show exactly where the
-    mirrored cuts will land, before the plane even touches the mesh.
+    ONE set for the whole edit session, derived in world space from the
+    ACTIVE object's frame - the same set the cut uses
+    (cutting._mirrored_planes_world), so a ghost always marks a cut that
+    really happens. It used to be derived per object, which drew a separate
+    set for every object; once the mirrors became session-wide those sets
+    coincided and the ghosts overdrew each other.
 
-    Ghosts are drawn for EVERY object in the edit session, because the cut
-    runs per object: each one reflects across its OWN origin, so N objects at
-    different locations mean N different sets of mirrored cuts. Drawing only
-    the active object's set advertised cuts that never happen and hid cuts
-    that do (measured in a two-cube session).
+    Deduped on the geometric plane, exactly as the cut is: a mirror that
+    reflects the plane onto itself makes no second cut, so it gets no ghost.
     """
     try:
         sc = getattr(context.window_manager, 'cut_plane', None)
@@ -349,23 +348,26 @@ def _draw_mirror_ghosts(context) -> None:
             (sc.mirror_x, sc.mirror_y, sc.mirror_z)) if on]
         if not axes:
             return
+        pivot, dirs = cutting._mirror_world_frame(context, sc)
+        if dirs is None:
+            return  # no active mesh / degenerate transform - nothing to mirror
         pos, rot = pose
         world = Matrix.Translation(pos) @ rot
-        for obj in cutting._edit_mesh_objects(context):
-            try:
-                inv = obj.matrix_world.inverted()
-            except ValueError:
-                continue  # singular transform - nothing sane to mirror across
-            local = inv @ world
-            matrices = [local]
-            for i in axes:
-                refl = Matrix.Identity(4)
-                refl[i][i] = -1.0
-                matrices += [refl @ m for m in matrices]
-            for m in matrices[1:]:  # [0] is the real plane - the gizmo draws it
-                draw_plane_at_matrix(obj.matrix_world @ m, scale=PLANE_SIZE,
-                                     scale_x=sc.x_scale, scale_y=sc.y_scale,
-                                     color=MIRROR_GHOST_COLOR)
+        matrices = [world]
+        for i in axes:
+            refl = cutting._mirror_reflection_world(pivot, dirs[i])
+            matrices += [refl @ m for m in matrices]
+        seen = {cutting._coincident_plane_key(
+            world.translation, world.to_3x3() @ Vector((0.0, 0.0, 1.0)))}
+        for m in matrices[1:]:  # [0] is the real plane - the gizmo draws it
+            key = cutting._coincident_plane_key(
+                m.translation, m.to_3x3() @ Vector((0.0, 0.0, 1.0)))
+            if key in seen:
+                continue    # coincides with the real plane or another ghost
+            seen.add(key)
+            draw_plane_at_matrix(m, scale=PLANE_SIZE,
+                                 scale_x=sc.x_scale, scale_y=sc.y_scale,
+                                 color=MIRROR_GHOST_COLOR)
     except Exception as e:
         logger.error(f"[CUT PLANE] Error drawing mirror ghosts: {e}")
 

@@ -96,13 +96,30 @@ check("the runtime keymap machinery is gone",
       and not hasattr(tool, "_sync_tool_keymap")
       and not hasattr(tool, "_resolve_transform_keys")
       and not hasattr(tool, "_detect_select_mouse"))
+# These describe the keymap's DESIGN, so they read the base template. The
+# shipped _TOOL_KEYMAP appends a Cmd twin per Ctrl item on macOS, where two
+# of the four box-select drags are Ctrl - so a count taken from the shipped
+# tuple is 6 there, not 4. Asserting the shipped tuple made this suite fail
+# on macOS for a keymap that is correct (caught the first time CI ran on it).
 check("all 4 box-select drags bind LEFTMOUSE (native tool_mouse is LEFTMOUSE "
       "in BOTH select-mouse branches)",
-      [i[1]["type"] for i in tool._TOOL_KEYMAP if i[0] == "view3d.select_box"]
-      == ['LEFTMOUSE'] * 4)
+      [i[1]["type"] for i in tool._TOOL_KEYMAP_BASE
+       if i[0] == "view3d.select_box"] == ['LEFTMOUSE'] * 4)
 check("box-select keeps the native ADD/SUB/AND vocabulary",
-      sorted(dict(i[2]["properties"])["mode"] for i in tool._TOOL_KEYMAP
+      sorted(dict(i[2]["properties"])["mode"] for i in tool._TOOL_KEYMAP_BASE
              if i[0] == "view3d.select_box" and i[2]) == ['ADD', 'AND', 'SUB'])
+# ...and the platform rule itself, both ways round.
+_ctrl_items = [i for i in tool._TOOL_KEYMAP_BASE if i[1].get("ctrl")]
+if sys.platform == 'darwin':
+    _twins = [i for i in tool._TOOL_KEYMAP if i[1].get("oskey")]
+    check("macOS: every Ctrl binding gets a Cmd twin",
+          len(_twins) == len(_ctrl_items) and len(_ctrl_items) > 0,
+          f"{len(_twins)} twins for {len(_ctrl_items)} Ctrl items")
+    check("macOS: the twins are APPENDED, base order untouched",
+          tool._TOOL_KEYMAP[:len(tool._TOOL_KEYMAP_BASE)] == tool._TOOL_KEYMAP_BASE)
+else:
+    check("non-macOS: the shipped keymap IS the base (no Cmd twins)",
+          tool._TOOL_KEYMAP == tool._TOOL_KEYMAP_BASE)
 check("ONE literal for the transform defaults (template == fallback)",
       tuple(i[1]["type"] for i in tool._TOOL_KEYMAP
             if i[0] in tool._TRANSFORM_IDNAMES) == tool._DEFAULT_TRANSFORM_KEYS)

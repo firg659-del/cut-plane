@@ -5,9 +5,12 @@
             --python tests/integration/mirror_ghosts.py
 
 Contract: the ghost planes are a PROMISE about where geometry will be cut.
-The cut runs per object (cutting._edit_mesh_objects) and each object reflects
-the plane across ITS OWN origin, so in a multi-object edit session N objects
-at different locations produce N different sets of mirrored cuts.
+The cut runs per object (cutting._edit_mesh_objects), and every object
+mirrors about the SAME anchor - resolved on the active object, the one the
+plane is placed from - so a multi-object session produces ONE set of
+mirrored cuts that every object is cut at. (It used to be per object, which
+made "symmetric" cuts symmetric about nothing in particular: measured, two
+cubes gave mirrors at z=-4.5 and z=3.5 for one plane.)
 
 The bug this locks: _draw_mirror_ghosts read context.edit_object - the ACTIVE
 object alone. With two cubes in one session the ghosts showed the active
@@ -23,7 +26,9 @@ import os
 import sys
 
 import bpy
-from mathutils import Vector
+from math import radians
+
+from mathutils import Matrix, Vector
 
 ADDON = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if ADDON not in sys.path:
@@ -61,6 +66,12 @@ sc = bpy.context.window_manager.cut_plane
 sc.mirror_x = True
 sc.show_mirror_planes = True
 sc.x_offset, sc.y_offset, sc.z_offset = 8.5, 0.0, 0.0
+# Face the plane along X. The plane's normal is its local Z, so at the default
+# rotation Mirror X reflects it onto ITSELF and correctly produces no cut and
+# no ghost - this suite used to fabricate an X normal for its expectation while
+# the renderer used the real pose, and only agreed because neither side deduped.
+_rot = Matrix.Rotation(radians(90.0), 4, 'Y')
+sc.rotation_matrix_flat = [v for row in _rot for v in row]
 
 check("both cubes are in the edit session (the cut applies to both)",
       len(cutting._edit_mesh_objects(bpy.context)) == 2,
@@ -84,28 +95,25 @@ def ghost_x_positions():
 
 
 def mirrored_cut_x_positions():
-    """Where the mirrored cuts REALLY land, straight from the cut's own
-    plane derivation - the promise the ghosts must match."""
-    xs = []
-    co_w, no_w = Vector((sc.x_offset, sc.y_offset, sc.z_offset)), Vector((1, 0, 0))
+    """Where the mirrored cuts REALLY land - the cut's own derivation, from
+    the REAL plane pose, which is the promise the ghosts must match."""
+    co_w, no_w = cutting.get_plane_world(bpy.context)
     axes = cutting._mirror_axes(sc)
-    for obj in cutting._edit_mesh_objects(bpy.context):
-        co_l, no_l = cutting.plane_to_object_local(obj, co_w, no_w)
-        for p_co, _p_no in cutting._mirrored_planes_local(co_l, no_l, axes)[1:]:
-            xs.append(round((obj.matrix_world @ p_co).x, 3))
-    return sorted(xs)
+    return sorted(round(c.x, 3) for c, _ in cutting._mirrored_planes_world(
+        bpy.context, co_w, no_w, axes, sc)[1:])
 
 ghosts = ghost_x_positions()
 cuts = mirrored_cut_x_positions()
 
-check("a ghost is drawn for EVERY object's mirror, not just the active one",
-      len(ghosts) == 2, f"ghosts at x={ghosts}")
+check("ONE shared ghost set for the session, not one per object",
+      len(ghosts) == 1, f"ghosts at x={ghosts}")
 check("REGRESSION: the ghosts sit exactly where the mirrored cuts land",
       ghosts == cuts, f"ghosts {ghosts} vs cuts {cuts}")
-check("...including the non-active object's mirror (the hidden real cut)",
-      any(abs(g - 7.5) < 0.01 for g in ghosts), f"ghosts at x={ghosts}")
-check("...and the active object's mirror is still shown",
-      any(abs(g + 8.5) < 0.01 for g in ghosts), f"ghosts at x={ghosts}")
+check("REGRESSION: no ghost is drawn twice (they used to overdraw)",
+      len(ghosts) == len(set(round(g, 3) for g in ghosts)),
+      f"ghosts at x={ghosts}")
+check("...at the active object's anchor (plane x=8.5 -> mirror x=-8.5)",
+      all(abs(g + 8.5) < 0.01 for g in ghosts), f"ghosts at x={ghosts}")
 
 # The eye toggle and the axis toggles still gate the whole pass.
 sc.show_mirror_planes = False
@@ -115,10 +123,20 @@ sc.show_mirror_planes = True
 sc.mirror_x = sc.mirror_y = sc.mirror_z = False
 check("no mirror axis means no ghosts", ghost_x_positions() == [])
 
-# 8 planes (X+Y+Z) per object, minus the real one, for two objects.
+# The ghosts dedupe exactly as the cut does, so the count follows the number
+# of DISTINCT cuts, not the number of toggles. An X-facing plane is reflected
+# onto itself by Mirror Y and Mirror Z, so all three axes still make one cut.
 sc.mirror_x = sc.mirror_y = sc.mirror_z = True
-check("X+Y+Z draws all 7 ghosts per object, for both objects",
-      len(ghost_x_positions()) == 14, str(len(ghost_x_positions())))
+check("X+Y+Z on an axis-aligned plane: the perpendicular mirrors add nothing",
+      len(ghost_x_positions()) == 1, str(len(ghost_x_positions())))
+
+# Only an OBLIQUE plane reaches the full 8 (7 ghosts + the real one), and it
+# is still ONE set for the session - it used to be one set per object.
+_obl = Matrix.Rotation(radians(35.0), 4, 'Y') @ Matrix.Rotation(radians(25.0), 4, 'X')
+sc.rotation_matrix_flat = [v for row in _obl for v in row]
+sc.y_offset, sc.z_offset = 0.7, 0.4          # off-centre on every axis too
+check("X+Y+Z on an OBLIQUE plane draws all 7, once for the session",
+      len(ghost_x_positions()) == 7, str(len(ghost_x_positions())))
 
 print(f"\nMIRROR GHOSTS: {'FAIL - ' + ', '.join(failures) if failures else 'OK'}")
 sys.stdout.flush()

@@ -6,8 +6,22 @@ import bpy
 from bpy.types import Operator
 from mathutils import Vector
 
-from ..lib.constants import logger
+from ..lib.constants import PLANE_ANCHOR_ITEMS, logger
 from .. import cutting
+
+
+def _op_pivot_local(obj, op):
+    """The operator's anchor in object-local space.
+
+    Same as cutting._mirror_pivot_local except CURSOR reads the position
+    STORED on the operator, not the live 3D cursor - so F9 and a scripted
+    re-run reproduce the cut they replay."""
+    if getattr(op, 'plane_anchor', 'BBOX') != 'CURSOR':
+        return cutting._mirror_pivot_local(obj, op)
+    try:
+        return obj.matrix_world.inverted() @ Vector(op.cursor_world)
+    except ValueError:
+        return None                    # singular transform - skip the object
 
 
 class CutPlaneCutOperator(Operator):
@@ -77,6 +91,19 @@ class CutPlaneCutOperator(Operator):
         description="Also cut at the plane mirrored across the object's local Z axis",
         default=False,
     )
+    # The CURSOR anchor resolves from the scene, so without this an F9
+    # re-run after nudging the cursor produced a DIFFERENT cut (measured:
+    # the mirrored plane moved outside the mesh and simply stopped cutting).
+    # Captured at invoke so the operator replays from its own properties.
+    cursor_world: bpy.props.FloatVectorProperty(
+        name="Cursor", size=3, default=(0.0, 0.0, 0.0), options={'HIDDEN'},
+    )
+    plane_anchor: bpy.props.EnumProperty(
+        name="Anchor",
+        description="The point the mirrored cuts reflect through",
+        items=PLANE_ANCHOR_ITEMS,
+        default='BBOX',
+    )
     selected_only: bpy.props.BoolProperty(
         name="Selected Only",
         description="Cut only the selected geometry (native Bisect semantics); "
@@ -110,6 +137,8 @@ class CutPlaneCutOperator(Operator):
         self.mirror_x = sc.mirror_x
         self.mirror_y = sc.mirror_y
         self.mirror_z = sc.mirror_z
+        self.plane_anchor = sc.plane_anchor
+        self.cursor_world = tuple(context.scene.cursor.location)
 
         return self.execute(context)
 
@@ -153,6 +182,15 @@ class CutPlaneCutOperator(Operator):
         sc["mirror_x"] = self.mirror_x
         sc["mirror_y"] = self.mirror_y
         sc["mirror_z"] = self.mirror_z
+        # Subscript assignment stores the RAW IDProperty, and Blender
+        # keeps an enum as its INT index - handing it the string
+        # identifier raises "Cannot assign a 'str' value to the
+        # existing 'plane_anchor' Int IDProperty". Normal assignment
+        # would take the string but fire the update callback, which is
+        # exactly the preview re-entry the subscript form avoids.
+        sc["plane_anchor"] = next(
+            (item[4] for item in PLANE_ANCHOR_ITEMS
+             if item[0] == self.plane_anchor), 0)
 
         # Native edit-mode semantics: the cut applies to EVERY mesh in the
         # multi-object edit session, like native Bisect. Deduped by mesh
@@ -161,7 +199,7 @@ class CutPlaneCutOperator(Operator):
         objects = [ob for ob in context.objects_in_mode_unique_data
                    if ob.type == 'MESH'] or [obj]
 
-        statuses = [self._bisect_object(ob) for ob in objects]
+        statuses = [self._bisect_object(ob, context) for ob in objects]
 
         if 'ERROR' in statuses:
             self.report({'ERROR'}, "Bisect failed (see console for details)")
@@ -201,7 +239,8 @@ class CutPlaneCutOperator(Operator):
             context.area.tag_redraw()
         return {'FINISHED'}
 
-    def _bisect_object(self, obj):
+    
+    def _bisect_object(self, obj, context):
         """Bisect ONE edit-mesh object at the stored world plane.
 
         Returns 'CUT' (geometry changed), 'NOOP' (the plane misses it),
@@ -222,7 +261,22 @@ class CutPlaneCutOperator(Operator):
         # cutting at every plane by hand (same expansion as the preview).
         mirror_axes = tuple(i for i, on in enumerate(
             (self.mirror_x, self.mirror_y, self.mirror_z)) if on)
-        planes = cutting._mirrored_planes_local(co_local, no_local, mirror_axes)
+        # One WORLD set for the session, from the active object's frame, then
+        # converted into this object's space - the same treatment the real
+        # plane gets. pivot_local comes from _op_pivot_local so a CURSOR
+        # anchor replays from the operator's stored cursor, not the scene.
+        act = getattr(context, 'edit_object', None) or obj
+        planes = []
+        for c_w, n_w in cutting._mirrored_planes_world(
+                context, Vector(self.plane_co), Vector(self.plane_no),
+                mirror_axes, self, _op_pivot_local(act, self)):
+            c_l, n_l = cutting.plane_to_object_local(obj, c_w, n_w)
+            if n_l.length_squared < 1e-12:
+                continue
+            n_l.normalize()
+            planes.append((c_l, n_l))
+        if not planes:
+            planes = [(co_local, no_local)]
 
         any_cut = False
         for plane_index, (p_co, p_no) in enumerate(planes):

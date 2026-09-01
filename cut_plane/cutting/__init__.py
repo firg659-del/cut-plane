@@ -65,8 +65,14 @@ from .invariants import (  # noqa: F401
     count_snapshot_datablocks,
 )
 from .plane import (  # noqa: F401
+    _coincident_plane_key,
     _mirror_axes,
+    _mirror_pivot_key,
+    _mirror_pivot_local,
     _mirrored_planes_local,
+    _mirror_reflection_world,
+    _mirror_world_frame,
+    _mirrored_planes_world,
     _plane_key,
     get_plane_world,
     plane_to_object_local,

@@ -18,7 +18,8 @@ from ..lib.constants import logger, on_internal_error
 from .invariants import _debug_check
 from .plane import (
     _mirror_axes,
-    _mirrored_planes_local,
+    _mirrored_planes_world,
+    _mirror_pivot_key,
     _plane_key,
     get_plane_world,
     plane_to_object_local,
@@ -270,7 +271,7 @@ def _apply_live_cut(context, obj, clear_inner, clear_outer, use_fill,
     sc = getattr(context.window_manager, 'cut_plane', None)
     mirror_axes = _mirror_axes(sc)
     key = (_plane_key(plane_co, plane_no), clear_inner, clear_outer, use_fill,
-           mirror_axes)
+           mirror_axes, _mirror_pivot_key(obj, sc))
     if key == cache.live_key:
         return
 
@@ -297,10 +298,21 @@ def _apply_live_cut(context, obj, clear_inner, clear_outer, use_fill,
         cache.written_state = None  # rebuild restored the baseline, no cut
         return
     no_l = no_l / nl
-    # The mirror toggles expand the one plane into its reflections; each
-    # runs the full bisect/clear/fill phase in sequence - identical to
-    # cutting at every plane by hand, so the semantics need no new rules.
-    planes_l = _mirrored_planes_local(co_l, no_l, mirror_axes)
+    # The mirror toggles expand the one plane into its reflections. They are
+    # derived in WORLD space from the ACTIVE object's frame, so the whole
+    # session is cut at the SAME set - exactly as it is cut at the same real
+    # plane - and each object just converts them into its own space. Derived
+    # per object, "Mirror X" meant a different world direction for every
+    # differently rotated object.
+    planes_l = []
+    for c_w, n_w in _mirrored_planes_world(context, plane_co, plane_no,
+                                           mirror_axes, sc):
+        c_l, n_l = plane_to_object_local(obj, c_w, n_w)
+        if n_l.length_squared < 1e-18:
+            continue                      # degenerate for THIS object - skip
+        planes_l.append((c_l, n_l.normalized()))
+    if not planes_l:
+        planes_l = [(co_l, no_l)]
 
     pre_counts = (len(bm.verts), len(bm.edges), len(bm.faces))
     any_cut = False
@@ -557,7 +569,8 @@ def adopt_committed_baseline(context, executed_plane=None) -> None:
             # SAME SHAPE as _apply_live_cut's key - incl. the mirror axes.
             cache.live_key = (_plane_key(plane[0], plane[1]),
                               sc.cut_clear_inner, sc.cut_clear_outer,
-                              sc.cut_use_fill, _mirror_axes(sc))
+                              sc.cut_use_fill, _mirror_axes(sc),
+                              _mirror_pivot_key(obj, sc))
             if (executed_plane is not None
                     and _plane_key(*executed_plane) != _plane_key(plane[0], plane[1])):
                 # F9 re-run with the gizmo plane moved since the cut: the cut

@@ -30,6 +30,13 @@ class CutPreviewCache:
     def reset(self) -> None:
         self.live_active: bool = False
         self.live_snapshot = None              # bpy Mesh datablock (the original)
+        # Local-space bbox centre of that snapshot, for a BBOX anchor. Cached
+        # because its readers are HOT - the preview dirty key every frame and
+        # the header warning every redraw - while the snapshot it measures
+        # only changes on session start, rebase, or a committed cut. Measured
+        # uncached on a 40k-vert mesh: 483 ms/frame preview and 182 ms per
+        # redraw. Dropped wherever live_snapshot is.
+        self.snapshot_bbox_center = None
         self.live_bvh = None                   # BVHTree of the snapshot (for snapping)
         # Object identity by session_uid, NOT name: renaming the object mid-preview
         # must not orphan the session (a name lookup silently baked the preview cut).

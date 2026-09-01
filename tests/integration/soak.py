@@ -105,6 +105,23 @@ def op_toggle_options(ctx, sc, rng):
     sc.cut_selected_only = rng.random() < 0.3
 
 
+def op_anchor(ctx, sc, rng):
+    # The anchor feeds BOTH the mirror pivot and (on centring) placement, and
+    # the BBOX one is cached off the session snapshot - so switching it under
+    # a live preview is exactly the path a stale cache would corrupt.
+    sc.plane_anchor = rng.choice(['BBOX', 'ORIGIN', 'CURSOR'])
+    sc.mirror_x = rng.random() < 0.3
+    sc.mirror_y = rng.random() < 0.3
+    sc.mirror_z = rng.random() < 0.3
+
+
+def op_move_cursor(ctx, sc, rng):
+    # A CURSOR anchor moves the mirrors without touching the plane or any
+    # toggle: the dirty key has to notice, or the preview goes stale.
+    bpy.context.scene.cursor.location = (
+        rng.uniform(-3.0, 3.0), rng.uniform(-3.0, 3.0), rng.uniform(-3.0, 3.0))
+
+
 def op_cut(ctx, sc, rng):
     bpy.ops.view3d.cut_plane_cut()
 
@@ -151,6 +168,7 @@ OPS = [
     op_cut, op_cut, op_cut,          # weight cuts higher
     op_reset, op_mode, op_orientation,
     op_sim_undo, op_sim_undo, op_save_cycle, op_restore, op_mutate_selection,
+    op_anchor, op_anchor, op_move_cursor,
 ]
 
 

@@ -6,9 +6,15 @@ import math
 import bpy
 from mathutils import Vector
 
-from ..lib.constants import DEBUG, SCALE_SOFT_MAX, logger, on_internal_error
+from ..lib.constants import (
+    DEBUG,
+    PLANE_ANCHOR_ITEMS,
+    SCALE_SOFT_MAX,
+    logger,
+    on_internal_error,
+)
 from ..lib.math_utils import (
-    default_center_offset,
+    anchor_center_offset,
     flat_to_matrix,
     get_current_orientation_type,
     orientation_with_rotate_override,
@@ -145,7 +151,8 @@ def ensure_default_center(context) -> None:
               and tuple(props.center_offset) == (0.0, 0.0, 0.0))
     if not virgin:
         return
-    props.center_offset = default_center_offset(edit_obj)
+    props.center_offset = anchor_center_offset(
+        edit_obj, props.plane_anchor, context)
     # Same rule as every plane-moving write path: the preview only follows
     # the plane via explicit refreshes. Timers are write-safe.
     from .. import cutting
@@ -358,6 +365,19 @@ class CutPlaneProperties(bpy.types.PropertyGroup):
         description="Also cut at the plane mirrored across the object's "
                     "local Z axis (like the Mirror modifier)",
         default=False,
+        update=update_cut_option,
+    )
+    # ONE reference for where a fresh plane centres AND what the mirrors
+    # reflect through. They used to disagree (bbox for placement, origin for
+    # mirroring), which put the mirrored cut 2 x (bbox centre - origin) away
+    # from where it belonged. Still derived, never stored - resolved per
+    # object at cut time like the planes themselves.
+    plane_anchor: bpy.props.EnumProperty(
+        name="Anchor",
+        description="The point a fresh plane centres on, and the point the "
+                    "mirrored cuts reflect through",
+        items=PLANE_ANCHOR_ITEMS,
+        default='BBOX',
         update=update_cut_option,
     )
     # Display only: the gray ghost planes at the mirrored positions. Hiding

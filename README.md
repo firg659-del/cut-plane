@@ -42,9 +42,27 @@ bust and only the selected horn is cut.
 
 ![Mirror X adds a second symmetric cut, Mirror Y makes four, and the eye icon hides the ghost planes](docs/images/mirror.gif)
 
-**Mirror X / Y / Z** cut with mirrored copies of the plane, reflected across
-the object's origin - one plane becomes two, four or eight. Grey ghost planes
-show where the mirrored cuts land; the eye icon hides them.
+**Mirror X / Y / Z** cut with mirrored copies of the plane - one plane becomes
+two, four or eight. They reflect through the **Anchor**, below. Grey ghost
+planes show where the mirrored cuts land; the eye icon hides them.
+
+A mirror that reflects the plane onto itself adds no cut, and the header names
+which axis. A fresh plane starts on the Anchor, so nothing is mirrored until
+you move it off.
+
+## Anchor
+
+![The Anchor dropdown switched from Bounding Box to Object Origin to 3D Cursor, with Reset dropping the plane onto each one in turn](docs/images/anchor.gif)
+
+One point decides where a fresh plane lands and what the mirrors reflect
+through. **Bounding Box** is the middle of the mesh, so the plane starts on the
+geometry - an object origin can sit far outside it. **Object Origin** and **3D
+Cursor** put that point where you want it instead; move the cursor and the
+mirrored cuts follow.
+
+**Reset** re-centres the plane on the current Anchor. With several objects in
+Edit Mode the Anchor is read from the active one, so every object is cut by the
+same planes.
 
 ## Numeric input
 
@@ -68,7 +86,7 @@ preview has already cut geometry away.
 
 ## Install
 
-Download `cut_plane-1.0.0.zip` from the
+Download `cut_plane-1.1.0.zip` from the
 [latest release](https://github.com/firg659-del/cut-plane/releases) and drag it
 into Blender, or use **Edit → Preferences → Get Extensions → Install from
 Disk…**

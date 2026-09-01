@@ -11,7 +11,7 @@ Requires **Blender 4.5 or newer** (tested through 5.1).
 ## Install
 
 1. In Blender: **Edit → Preferences → Get Extensions → Install from Disk…**
-   and pick the downloaded `cut_plane-1.0.1.zip`
+   and pick the downloaded `cut_plane-1.1.0.zip`
    (or simply drag the zip into the Blender window).
 2. That's it — the extension enables itself.
 
@@ -31,9 +31,11 @@ Requires **Blender 4.5 or newer** (tested through 5.1).
 **Gizmo** — arrows move, dials rotate (one per axis + a view dial),
 corner handles scale, the center circle drags freely. The **Mode**
 dropdown switches the visible handle set (Move / Rotate / Scale);
-**Orientation** switches Global / Local. The gizmo icon at the far left
-of the header hides every handle, leaving just the plane outline — handy
-once you work by keyboard.
+**Orientation** switches Global / Local; **Anchor** sets the point a
+fresh plane centers on and the mirrors reflect through — the mesh
+bounding box (default), the object origin, or the 3D cursor. The gizmo
+icon at the far left of the header hides every handle, leaving just the
+plane outline — handy once you work by keyboard.
 
 The cut itself is an **infinite plane**: the orange rectangle only shows
 you where that plane lies. Scaling it (`S`, or the corner handles) resizes
@@ -69,8 +71,11 @@ you can limit snapping to Move / Rotate / Scale individually.
 
 - **Fill** — caps the cut with faces (same result native Bisect gives).
 - **Clear Inner / Clear Outer** — delete one side of the cut.
-- **Mirror X / Y / Z** — cut with mirrored copies of the plane at once;
-  the eye icon shows or hides the ghost planes.
+- **Mirror X / Y / Z** — cut with mirrored copies of the plane at once,
+  reflected through the **Anchor**; the eye icon shows or hides the ghost
+  planes. An axis that reflects the plane onto itself adds no cut — the
+  header names them. With an axis-aligned plane that is every axis except
+  the plane's own normal.
 - **Selected Only** — cut only the selected geometry.
 - **Select Loop** (in the `…` popover) — select the fresh edge loop
   after cutting.
@@ -95,8 +100,10 @@ Your bindings survive addon updates.
 ## Good to know
 
 - With several meshes in Edit Mode at once, one plane cuts **all of
-  them** in the same pass — and each object mirrors around its own
-  origin, so the ghost planes appear per object.
+  them** in the same pass, and they all mirror through the same Anchor —
+  read from the active object, the one the plane is placed from.
+- A fresh plane starts **on** the Anchor, so mirroring adds nothing until
+  you move the plane off it.
 - While the tool is active, `Alt+R` and `Alt+S` override native *Spin*
   and *Shrink/Fatten*. Rebind them in the preferences if you rely on
   those — everywhere outside the tool they're untouched.

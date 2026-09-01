@@ -5,6 +5,7 @@ Mesh writes -> write-safe contexts only (transform modals / option callback /
 depsgraph / timer); never a draw handler.
 """
 
+import array
 import uuid
 
 import bmesh
@@ -24,6 +25,7 @@ def _free_live_snapshot(cache) -> None:
     snap = cache.live_snapshot
     cache.live_snapshot = None
     cache.live_bvh = None  # snapshot gone -> its BVH is stale
+    cache.snapshot_bbox_center = None  # ...and so is its bbox centre
     if snap is not None:
         try:
             bpy.data.meshes.remove(snap)
@@ -128,6 +130,7 @@ def _live_take_snapshot(cache, obj) -> bool:
     obj.data[_RECOVERY_TOKEN_PROP] = token
     _free_live_snapshot(cache)  # drop any stale snapshot first
     cache.live_snapshot = snap
+    cache.snapshot_bbox_center = None  # recomputed lazily off the new snapshot
     cache.live_object_uid = obj.session_uid  # rename-proof identity
     # Selection counts AS SNAPSHOTTED (the copy carries the flags) - the O(1)
     # comparison basis for the selection-adoption check.
@@ -180,10 +183,11 @@ def _snapshot_bounds(snap):
     """(lo, hi) local-space bounding corners of a snapshot mesh.
 
     Caller guarantees snap.vertices is non-empty."""
-    lo = Vector(snap.vertices[0].co)
-    hi = lo.copy()
-    for v in snap.vertices:
-        for i in range(3):
-            lo[i] = min(lo[i], v.co[i])
-            hi[i] = max(hi[i], v.co[i])
+    # foreach_get fills the whole coordinate buffer in one call; the loop
+    # it replaces cost ~6 RNA reads per vertex. Values are the mesh's own
+    # float32, so the bounds are bit-identical.
+    buf = array.array('f', [0.0]) * (len(snap.vertices) * 3)
+    snap.vertices.foreach_get("co", buf)
+    lo = Vector((min(buf[0::3]), min(buf[1::3]), min(buf[2::3])))
+    hi = Vector((max(buf[0::3]), max(buf[1::3]), max(buf[2::3])))
     return lo, hi

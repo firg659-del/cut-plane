@@ -203,6 +203,40 @@ class CutPlaneTool(WorkSpaceTool):
             return None  # a draw function must never raise over a warning
         if blocker is not None:
             return f"No live preview: {blocker}"
+        # A mirror that reflects the plane ONTO ITSELF adds no cut - either
+        # the plane sits on the mirror axis, or its normal is perpendicular
+        # to that axis (sliding an infinite plane within itself does not move
+        # the cut). At the DEFAULT pose EVERY combination is in that state:
+        # measured, all seven of X/Y/Z/XY/XZ/YZ/XYZ produce exactly one cut.
+        # So a user's first act after ticking Mirror is nothing at all, with
+        # no feedback - which reads as the feature being broken. Mirrors are
+        # per object, so this only warns when NO object gains a cut.
+        try:
+            axes = cutting._mirror_axes(props)
+            if axes:
+                plane = cutting.get_plane_world(context)
+                if plane is not None:
+                    # One world set for the session, so an axis is inert or
+                    # not for all of it - no per-object loop needed.
+                    # Per AXIS, not just in total: with three axes enabled and
+                    # an axis-aligned plane you get TWO cuts, and nothing said
+                    # that two of the three toggles were inert. An axis that
+                    # reflects the plane onto itself for EVERY object can
+                    # never contribute at this pose.
+                    names = ('X', 'Y', 'Z')
+                    inert = [names[i] for i in axes
+                             if len(cutting._mirrored_planes_world(
+                                 context, plane[0], plane[1], (i,), props)) < 2]
+                    if inert:
+                        # Always NAME them, whether one axis is inert or all
+                        # of them: "Mirror X, Y add no cut here" tells you
+                        # which toggle to move off, a bare "Mirror adds no
+                        # cut" leaves you to work it out.
+                        return "Mirror %s %s no cut here" % (
+                            ", ".join(inert),
+                            "adds" if len(inert) == 1 else "add")
+        except Exception:
+            return None  # a draw function must never raise over a warning
         return None
 
     @staticmethod
@@ -246,6 +280,12 @@ class CutPlaneTool(WorkSpaceTool):
         # Orientation exactly like the native header dropdown: item icon +
         # name, no "Orientation:" label prefix.
         layout.prop(props, "orientation", text="")
+        # Anchor rides beside it: both answer "relative to WHAT?" - the same
+        # pairing the 3D-viewport header uses for Transform Orientation and
+        # Pivot Point, so the grouping is already familiar. Icon-only, like
+        # the native pivot selector: the header CLIPS rather than reflows, so
+        # a labelled dropdown here risks pushing Cut out of sight.
+        layout.prop(props, "plane_anchor", text="", icon_only=True)
         CutPlaneTool._draw_snap_pair(layout, props)
         layout.operator("view3d.cut_plane_reset", text="Reset", icon='LOOP_BACK')
 
@@ -290,6 +330,7 @@ class CutPlaneTool(WorkSpaceTool):
         row.active = props.show_gizmo_handles  # handle set - moot when hidden
         row.prop(props, "mode", expand=True)
         layout.prop(props, "orientation")
+        layout.prop(props, "plane_anchor")
 
         col = layout.column(heading="Snap")
         row = col.row(align=True)

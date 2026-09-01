@@ -126,6 +126,29 @@ TOOL_IDNAME = "mesh_tool.cut_plane"
 # responsive (Execute Cut still works - it is one-shot, not per-frame).
 CUT_PREVIEW_MAX_FACES = 300000
 
+# The point a fresh plane centres on AND the point the mirrors reflect
+# through - one reference for both, so they cannot disagree. They used to:
+# placement centred on the bounding box while Mirror reflected about the
+# ORIGIN, so on any mesh where those differ the mirrored cut was wrong by
+# exactly 2 x (bbox centre - origin) - metres out on an imported mesh.
+# BBOX is the default because it keeps placement exactly where it has always
+# been; ORIGIN is the Mirror-modifier convention and right for deliberately
+# modelled assets, but a plane starting there often misses the geometry.
+# Icons and indices are EXPLICIT: the stored value is the index, so it must
+# not shift when items are reordered or added - a saved .blend would silently
+# come back with a different anchor.
+PLANE_ANCHOR_ITEMS = (
+    ('BBOX', "Bounding Box",
+     "Centre and mirror around the mesh bounding-box centre - always on the "
+     "geometry, whatever the origin is doing", 'PIVOT_BOUNDBOX', 0),
+    ('ORIGIN', "Object Origin",
+     "Centre and mirror around the object origin - Mirror-modifier "
+     "behaviour, and right when the origin IS the symmetry plane",
+     'OBJECT_ORIGIN', 1),
+    ('CURSOR', "3D Cursor",
+     "Centre and mirror around the 3D cursor", 'PIVOT_CURSOR', 2),
+)
+
 # Numerical precision constants
 ZERO_EPSILON = 1e-10      # Threshold for near-zero checks (axis length, etc.)
 PARALLEL_EPSILON = 1e-6   # Threshold for parallel line/plane checks

@@ -3,15 +3,28 @@
 User-facing changes to Cut Plane. Versions match `blender_manifest.toml`;
 entries are written to be paste-ready for store update notes.
 
-## 1.0.1 — 2026-08-25
-Bug fix.
+## 1.1.0 — 2026-08-29
 - **Mirror no longer deletes the mesh.** A plane that a mirror
-  reflects onto ITSELF was expanded into two cuts of the same
-  plane facing opposite ways, so Clear Inner or Clear Outer
-  removed both sides and the mesh vanished. This was the default
-  state - the plane starts at the mesh centre, which on a fresh
-  object is the origin - so Mirror Z plus a Clear emptied it.
-  Fill capped such a cut twice, leaving coincident faces.
+  reflects onto ITSELF was expanded into two cuts of the same plane
+  facing opposite ways, so Clear Inner or Clear Outer removed both
+  sides and the mesh vanished. This was the default state — the
+  plane starts at the mesh centre, which on a fresh object is the
+  origin — so Mirror Z plus a Clear emptied it. Fill capped such a
+  cut twice, leaving coincident faces.
+- **Anchor** — one point that a fresh plane centres on and that the
+  mirrored cuts reflect through: Bounding Box (default, unchanged
+  placement), Object Origin, or 3D Cursor. These used to disagree:
+  the plane centred on the bounding box while Mirror reflected about
+  the origin, so on a mesh whose origin sits away from its geometry
+  — most imported models — the mirrored cut landed twice that
+  distance off, often outside the mesh entirely. With several meshes
+  in Edit Mode they now mirror through the same Anchor, read from the
+  active object.
+- **Mirror says when it adds nothing.** A mirror that reflects the
+  plane onto itself has no second cut to make, which is every
+  combination while the plane sits on the Anchor. The header and the
+  Active Tool panel name the axes that add nothing; move the plane
+  off them and it clears.
 
 ## 1.0.0 — 2026-07-22
 Initial public release.
