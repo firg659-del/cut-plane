@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Reset operator: full reset (button) or per-channel clears (one key each).
+"""Reset operator: full reset (button) or per-channel clears (one key each),
+and its sibling Align: lay the plane in a world plane (XY / XZ / YZ).
 
 The per-channel keys default to Alt+G / Alt+R / Alt+S - the native
 clear-transform vocabulary - but they are rebindable tool keymap items, so
@@ -7,13 +8,15 @@ nothing here names a key: the panel row and the Keymap editor show the real
 chord, and a tooltip restating it could only drift out of date.
 """
 
+from math import radians
+
 import bpy
 from bpy.types import Operator
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 from .. import cutting
 from ..lib.constants import on_internal_error
-from ..lib.math_utils import effective_orientation, flat_to_matrix
+from ..lib.math_utils import effective_orientation, flat_to_matrix, matrix_to_flat
 
 _IDENTITY_FLAT = (1.0, 0.0, 0.0, 0.0,
                   0.0, 1.0, 0.0, 0.0,
@@ -112,6 +115,77 @@ class CutPlaneResetOperator(Operator):
             cutting.update_live_preview(context)
         except Exception:
             on_internal_error()  # DEBUG: surface; prod: never block the reset
+
+        pose_history.push_if_changed(context, pose_before)
+
+        for window in context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+        return {'FINISHED'}
+
+
+# Align keys name the axis LEFT OUT, as Shift+X / Shift+Y / Shift+Z do in a
+# native transform (Transform Modal Map PLANE_X/Y/Z): Shift+Z lays the plane
+# in XY. The normals point along +X / +Y / +Z, so the side Clear Outer drops
+# is the positive one - the same as after Alt+R, which is the XY case.
+_ALIGN = {
+    'X': Matrix.Rotation(radians(90.0), 4, 'Y'),    # normal +X: plane YZ
+    'Y': Matrix.Rotation(radians(-90.0), 4, 'X'),   # normal +Y: plane XZ
+    'Z': Matrix.Identity(4),                        # normal +Z: plane XY
+}
+
+
+class CutPlaneAlignOperator(Operator):
+    """Lay the plane in a world plane, keeping its position"""
+    bl_idname = "view3d.cut_plane_align"
+    bl_label = "Align Plane"
+    # As Reset: a WM-only pose change, recorded by pose_history, no native
+    # undo step and no adjust-last-operation panel.
+    bl_options = set()
+
+    axis: bpy.props.EnumProperty(
+        name="Axis Left Out",
+        description="The axis the plane leaves out - its normal",
+        items=[
+            ('X', "YZ", "The world YZ plane (facing X)"),
+            ('Y', "XZ", "The world XZ plane (facing Y)"),
+            ('Z', "XY", "The world XY plane (facing Z)"),
+        ],
+        default='Z',
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'EDIT_MESH'
+
+    @classmethod
+    def description(cls, context, properties):
+        return {
+            'X': "Lay the plane in the world YZ plane (facing X), keeping its position",
+            'Y': "Lay the plane in the world XZ plane (facing Y), keeping its position",
+            'Z': "Lay the plane in the world XY plane (facing Z), keeping its position",
+        }.get(properties.axis, cls.__doc__)
+
+    def execute(self, context):
+        from ..state import pose_history
+        props = context.window_manager.cut_plane
+        pose_before = pose_history.capture_pose(context)
+        rotation = _ALIGN[self.axis]
+        # In LOCAL orientation the offsets are read through the rotation:
+        # carry them over to the new one so the plane turns in place.
+        if effective_orientation(context) == 'LOCAL':
+            old = flat_to_matrix(props.rotation_matrix_flat).to_3x3()
+            world = old @ Vector((props.x_offset, props.y_offset, props.z_offset))
+            local = rotation.to_3x3().transposed() @ world
+            props.x_offset, props.y_offset, props.z_offset = local
+        props.rotation_matrix_flat = matrix_to_flat(rotation)
+
+        # Explicit refresh, as Reset: plane writes tag nothing.
+        try:
+            cutting.update_live_preview(context)
+        except Exception:
+            on_internal_error()  # DEBUG: surface; prod: never block the align
 
         pose_history.push_if_changed(context, pose_before)
 

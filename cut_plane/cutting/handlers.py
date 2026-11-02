@@ -20,8 +20,8 @@ import bpy
 from ..lib.constants import logger, on_internal_error
 from . import state
 from .invariants import _debug_check
-from .preview import adopt_committed_baseline, restore_live_cut, update_live_preview
-from .snapshot import _snapshot_valid
+from .preview import adopt_committed_baseline, restore_live_cut, sessions_armed, update_live_preview
+from .snapshot import _snapshot_valid, repair_marked_mesh, replace_bmesh
 from .state import (
     _RECOVERY_TARGET_PROP,
     _RECOVERY_TOKEN_PROP,
@@ -31,6 +31,24 @@ from .state import (
 from .watchdog import _deferred_sync
 
 
+def _repair_resurrected_previews() -> None:
+    """After undo/redo: revert any preview cut the restored step brought
+    back (see snapshot.repair_marked_mesh). MUST run before the purge below
+    removes the snapshots that same step restored."""
+    if not state._marked_mesh_uids:
+        return
+    live = {c.live_object_uid for c in _sessions.values()}
+    session_meshes = {ob.data.session_uid for ob in bpy.data.objects
+                      if ob.session_uid in live and ob.type == 'MESH'}
+    for me in list(bpy.data.meshes):
+        if me.session_uid in session_meshes:
+            continue  # a live preview's marker is current, not resurrected
+        try:
+            repair_marked_mesh(me)
+        except Exception:
+            logger.exception(f"[CUT PLANE] Undo repair of '{me.name}' failed")
+
+
 def _purge_orphan_snapshots() -> None:
     """Write-safe timer: remove snapshot datablocks no longer referenced.
 
@@ -38,7 +56,9 @@ def _purge_orphan_snapshots() -> None:
     unsafe inside those handlers), so the fake-user snapshot Mesh they abandon
     would linger forever. This reclaims every snapshot datablock except the
     current live one. Runs from a timer, where bpy.data edits are safe.
+    First repairs any preview an undo brought back - it needs those snapshots.
     """
+    _repair_resurrected_previews()
     keep_ptrs = set()
     for cache in _sessions.values():
         if _snapshot_valid(cache):
@@ -121,8 +141,7 @@ def _recover_orphan_snapshots() -> None:
         try:
             if target.is_editmode:  # file was saved (crashed) in Edit Mode
                 bm = bmesh.from_edit_mesh(target)
-                bm.clear()
-                bm.from_mesh(me)
+                replace_bmesh(bm, me)
                 bmesh.update_edit_mesh(target, destructive=True)
             else:
                 tmp = bmesh.new()
@@ -173,9 +192,7 @@ _readopt_after_save = False
 def _on_save_pre(*_args) -> None:
     global _restore_after_save, _readopt_after_save
     _restore_after_save = bool(_sessions)
-    _readopt_after_save = bool(_sessions) and all(
-        c.mesh_is_baseline and c.live_key is not None
-        for c in _sessions.values())
+    _readopt_after_save = sessions_armed()
     try:
         restore_live_cut(bpy.context)
     except Exception:
@@ -210,6 +227,10 @@ def _on_load_post(*_args) -> None:
     _restore_after_save = False
     _readopt_after_save = False
     _sessions.clear()
+    state._marked_mesh_uids.clear()
+    state._written_fps.clear()
+    state._dialog_resume = None  # a paused preview belonged to the old file
+    state._input_owned = False   # a running transform was cancelled by the load
     # Recovery, not a plain purge: a snapshot in a LOADED file means an
     # autosave/crash file with the preview baked in - restore the uncut
     # original from it first (see _recover_orphan_snapshots), then purge.
@@ -238,6 +259,10 @@ def _on_undo_redo_post(*_args) -> None:
     when the flag is False we simply fall back to the watchdog (no regression).
     """
     _sessions.clear()
+    if state._dialog_resume is not None:
+        # Paused for a file browser: the armed baseline it would re-adopt
+        # is gone with the undo - come back with a fresh preview instead.
+        state._dialog_resume = ('apply', None)
     # The purge is UNCONDITIONAL on purpose: undo can RESURRECT a snapshot
     # datablock into bpy.data from a step where a session existed, while the
     # Python-side registry is already empty - gating on live sessions would

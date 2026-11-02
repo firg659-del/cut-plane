@@ -154,8 +154,14 @@ obj = fresh_cube()  # 6 faces
 orig_cap = preferences.preview_face_cap
 preferences.preview_face_cap = lambda: 20  # 1 plane: 6<=20 ok; 8 planes: 20//8=2
 try:
-    sc.center_offset = (0.0, 0.0, 0.5)
+    # Tilted and off-centre, so all three mirrors give REAL planes: 8. (An
+    # axis plane like z = 0.5 maps onto itself under Mirror X and Y - only
+    # 2 planes, which keep the budget at 20//2 = 10.)
+    from mathutils import Euler
+    sc.center_offset = (0.3, 0.2, 0.5)
     sc.x_offset = sc.y_offset = sc.z_offset = 0.0
+    sc.rotation_matrix_flat = [v for row in Euler((0.4, 0.3, 0.0)).to_matrix().to_4x4()
+                               for v in row]
     cutting.update_live_preview(bpy.context)
     check("session runs under the cap", cutting._session_for(obj) is not None)
     sc.mirror_x = sc.mirror_y = sc.mirror_z = True  # budget 20//8 = 2 < 6

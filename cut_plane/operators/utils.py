@@ -32,6 +32,10 @@ def prevent_reentry(invoke_method):
         if getattr(self.__class__, '_active_instance', None) is not None:
             return {'CANCELLED'}
         self.__class__._active_instance = self
+        # The modal owns the input from here until release_operator: no
+        # user edit can land in between (see cutting.begin_owned_input).
+        from .. import cutting
+        cutting.begin_owned_input()
         try:
             result = invoke_method(self, context, event)
         except Exception:
@@ -50,21 +54,33 @@ def release_on_error(modal_method):
     Blender cancels a modal operator whose modal() raised, but does NOT
     call cancel() in that path - without this wrapper the exception
     would leave _active_instance set and permanently lock the operator
-    out until re-registration. The exception still propagates so the
-    traceback reaches the console.
+    out until re-registration. It also runs the operator's own cancel()
+    (best effort), so the plane returns to its start pose and the drag's
+    arc, hidden handles, header and legend are cleared as on Esc. The
+    exception still propagates so the traceback reaches the console.
     """
     def wrapper(self, context, event):
         try:
             return modal_method(self, context, event)
         except Exception:
+            cancel = getattr(self, 'cancel', None)
+            if cancel is not None:
+                try:
+                    cancel(context)
+                except Exception:
+                    from ..lib.constants import logger
+                    logger.exception('[CUT PLANE] Cleanup after a failed transform failed')
             release_operator(self)
             raise
     return wrapper
 
 
 def release_operator(operator) -> None:
-    """Clear _active_instance on the operator's class (call on FINISHED/CANCELLED)."""
+    """Clear _active_instance on the operator's class (call on FINISHED/CANCELLED)
+    and hand the input back (idempotent)."""
     operator.__class__._active_instance = None
+    from .. import cutting
+    cutting.end_owned_input()
 
 
 def next_kb_constraint(current, kind: str, axis: str):

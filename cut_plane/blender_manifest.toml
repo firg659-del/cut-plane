@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "cut_plane"
-version = "1.1.0"
+version = "1.2.0"
 name = "Cut Plane"
 tagline = "Cut a mesh with a positionable plane (live preview)"
 maintainer = "Firg <firgcg@gmail.com>"
@@ -10,8 +10,12 @@ website = "https://github.com/firg659-del/cut-plane"
 
 blender_version_min = "4.5.0"
 
+# The code is GPL. The toolbar icon (icons/mesh_tool.cut_plane.dat, made
+# by tools/make_tool_icon.py) is CC0: extensions.blender.org requires
+# binary assets to be CC0.
 license = [
   "SPDX:GPL-3.0-or-later",
+  "SPDX:CC0-1.0",
 ]
 
 copyright = [

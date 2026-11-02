@@ -6,22 +6,55 @@ import bpy
 from bpy.types import Operator
 from mathutils import Vector
 
-from ..lib.constants import PLANE_ANCHOR_ITEMS, logger
+from ..lib.constants import BISECT_DIST, PLANE_ANCHOR_ITEMS, logger
 from .. import cutting
 
 
 def _op_pivot_local(obj, op):
     """The operator's anchor in object-local space.
 
-    Same as cutting._mirror_pivot_local except CURSOR reads the position
-    STORED on the operator, not the live 3D cursor - so F9 and a scripted
-    re-run reproduce the cut they replay."""
-    if getattr(op, 'plane_anchor', 'BBOX') != 'CURSOR':
+    Same as cutting._mirror_pivot_local except CURSOR and BBOX read the
+    point STORED on the operator - so F9 and a scripted re-run reproduce
+    the cut they replay, and BBOX is the box the preview mirrored about
+    (see _bbox_anchor_world)."""
+    anchor = getattr(op, 'plane_anchor', 'BBOX')
+    if anchor == 'CURSOR':
+        world = Vector(op.cursor_world)
+    elif anchor == 'BBOX':
+        world = Vector(op.bbox_anchor_world)
+    else:
         return cutting._mirror_pivot_local(obj, op)
     try:
-        return obj.matrix_world.inverted() @ Vector(op.cursor_world)
+        return obj.matrix_world.inverted() @ world
     except ValueError:
         return None                    # singular transform - skip the object
+
+
+def _bbox_anchor_world(context, op) -> Vector:
+    """The BBOX anchor's WORLD point, resolved the way the preview resolves it.
+
+    MUST run before restore_live_cut: that ends the preview session, and
+    the fallback then read obj.data - which in Edit Mode still holds the
+    mesh as of Edit Mode entry. After one cut in the session the commit
+    mirrored about a different centre than the preview showed (measured:
+    preview cuts at -0.25/-0.75, Execute at -0.25/+0.25 - outside the
+    remaining half, so the mirrored cut silently vanished). With a session
+    this is its snapshot's box; without one (scripted call, blocked
+    preview), the LIVE edit mesh's box - O(V), but one-shot."""
+    act = context.edit_object
+    if act is None or act.type != 'MESH':
+        return Vector()
+    if cutting._session_for(act) is not None:
+        local = cutting._mirror_pivot_local(act, op)
+        if local is not None:
+            return act.matrix_world @ local
+        return act.matrix_world.translation.copy()
+    verts = bmesh.from_edit_mesh(act.data).verts
+    if not verts:
+        return act.matrix_world.translation.copy()
+    lo = Vector((min(v.co.x for v in verts), min(v.co.y for v in verts), min(v.co.z for v in verts)))
+    hi = Vector((max(v.co.x for v in verts), max(v.co.y for v in verts), max(v.co.z for v in verts)))
+    return act.matrix_world @ ((lo + hi) * 0.5)
 
 
 class CutPlaneCutOperator(Operator):
@@ -73,7 +106,9 @@ class CutPlaneCutOperator(Operator):
         description="Remove geometry on the front side of the plane",
         default=False,
     )
-    use_fill: bpy.props.BoolProperty(name="Fill", default=False)
+    use_fill: bpy.props.BoolProperty(
+        name="Fill", default=False,
+        description="Cap the cut on the side you keep (with Clear Inner or Clear Outer)")
     # Mirror-modifier semantics: also cut at the plane's reflections across
     # the object's local axes (see cutting._mirrored_planes_local).
     mirror_x: bpy.props.BoolProperty(
@@ -95,8 +130,18 @@ class CutPlaneCutOperator(Operator):
     # re-run after nudging the cursor produced a DIFFERENT cut (measured:
     # the mirrored plane moved outside the mesh and simply stopped cutting).
     # Captured at invoke so the operator replays from its own properties.
+    # SKIP_SAVE + is_property_set (see execute): "set" means the caller
+    # passed it or this run captured it, never a last-used value carried
+    # over from an earlier call. A scripted call that omitted it used the
+    # world origin in 1.1.0; it now gets the live cursor, like the preview.
+    # F9 re-runs keep the captured value.
     cursor_world: bpy.props.FloatVectorProperty(
-        name="Cursor", size=3, default=(0.0, 0.0, 0.0), options={'HIDDEN'},
+        name="Cursor", size=3, default=(0.0, 0.0, 0.0), options={'HIDDEN', 'SKIP_SAVE'},
+    )
+    # The BBOX anchor, captured before the preview session ends (see
+    # _bbox_anchor_world) - same SKIP_SAVE rule as cursor_world.
+    bbox_anchor_world: bpy.props.FloatVectorProperty(
+        name="Anchor", size=3, default=(0.0, 0.0, 0.0), options={'HIDDEN', 'SKIP_SAVE'},
     )
     plane_anchor: bpy.props.EnumProperty(
         name="Anchor",
@@ -160,6 +205,15 @@ class CutPlaneCutOperator(Operator):
         # restores true matrices before any conversion; ordinary clicks pay
         # a no-op refresh.
         context.view_layer.update()
+
+        # Resolve the anchor points BEFORE the restore below ends the preview
+        # session (BBOX reads its snapshot). Values a caller passed, or a
+        # previous run captured (F9), are kept.
+        props = self.properties
+        if not props.is_property_set("cursor_world"):
+            self.cursor_world = tuple(context.scene.cursor.location)
+        if self.plane_anchor == 'BBOX' and not props.is_property_set("bbox_anchor_world"):
+            self.bbox_anchor_world = _bbox_anchor_world(context, self)
 
         # Live-cut preview edits the mesh outside the undo system; restore the
         # original first so this operator bisects the clean mesh and stays
@@ -279,7 +333,22 @@ class CutPlaneCutOperator(Operator):
             planes = [(co_local, no_local)]
 
         any_cut = False
+        # Hidden geometry is never cut or cleared (native Bisect cannot
+        # reach it either) - the same domain rule as the live preview.
+        has_hidden = not self.selected_only and cutting.bmesh_has_hidden(bm)
+        face_mode = cutting.face_select_mode(bm)
+        if not self.selected_only:
+            obj.update_from_editmode()   # obj.data mirrors bm: the fast plan
         for plane_index, (p_co, p_no) in enumerate(planes):
+            plan = None
+            if not self.selected_only:
+                # The selection the bisect is about to lose (see SplitPlan).
+                if plane_index == 0:
+                    plan, _arrays = cutting.split_plan_from_mesh(
+                        obj.data, p_co, p_no, BISECT_DIST, face_mode)
+                else:
+                    plan = cutting.split_plan_from_bmesh(bm, p_co, p_no, BISECT_DIST,
+                                                         face_mode)
             if self.selected_only:
                 # Native mesh.bisect semantics: operate on selected geometry
                 # only (restore_live_cut in execute brought back the baseline
@@ -306,7 +375,8 @@ class CutPlaneCutOperator(Operator):
                     # and let the guard classify what actually happened.
                     break
             else:
-                geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+                geom = cutting._build_domain(bm, False, include_verts=True,
+                                             visible_only=has_hidden)
             try:
                 # NEVER the bisect's own clear flags: (a) Selected Only needs
                 # the face-granular clear (vert-level would kill unselected
@@ -321,7 +391,7 @@ class CutPlaneCutOperator(Operator):
                 result = bmesh.ops.bisect_plane(
                     bm,
                     geom=geom,
-                    dist=1e-5,
+                    dist=BISECT_DIST,
                     plane_co=p_co,
                     plane_no=p_no,
                     use_snap_center=False,
@@ -335,7 +405,7 @@ class CutPlaneCutOperator(Operator):
             geom_cut = result.get('geom_cut', [])
             if not self.selected_only:
                 # Two-sided repair while both halves still exist (see above)
-                cutting.repair_split_selection(geom_cut)
+                cutting.repair_split_selection(bm, geom_cut, plan)
             if self.clear_inner or self.clear_outer:
                 # Face-granular for BOTH modes: equivalent to the native
                 # clear on a whole-mesh domain, required for Selected Only
@@ -344,18 +414,15 @@ class CutPlaneCutOperator(Operator):
                                           self.clear_outer)
 
             fill_geom = ()
-            if self.use_fill:
-                # Native Bisect's fill algorithm (mesh_bisect.cc):
-                # triangle_fill with dissolve - handles non-manifold cross-
-                # sections and interior membranes that edgenet_fill silently
-                # skipped (see cutting/preview.py).
+            if cutting.fill_applies(self.use_fill, self.clear_inner, self.clear_outer):
+                # Native Bisect's fill (editmesh_bisect.cc): triangle_fill
+                # with dissolve, then face_attribute_fill - the one shared
+                # implementation the live preview uses too (see fill_cut).
                 cut_edges = [g for g in geom_cut
                              if isinstance(g, bmesh.types.BMEdge)]
                 if cut_edges:
                     try:
-                        fill_res = bmesh.ops.triangle_fill(
-                            bm, edges=cut_edges, use_dissolve=True, normal=p_no)
-                        fill_geom = fill_res.get('geom', ())
+                        fill_geom = cutting.fill_cut(bm, cut_edges, p_no)
                     except Exception as e:
                         logger.warning(
                             f"[CUT PLANE] Fill failed on '{obj.name}': {e}")
@@ -370,7 +437,7 @@ class CutPlaneCutOperator(Operator):
                                             fill_geom)
             else:
                 cutting.apply_cut_selection(
-                    geom_cut, select=self.select_loop)
+                    geom_cut, select=self.select_loop, bm=bm)
 
             any_cut = any_cut or bool(geom_cut) or bool(fill_geom)
 
@@ -388,7 +455,9 @@ class CutPlaneCutOperator(Operator):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        layout.prop(self, "use_fill")
+        fill = layout.row()
+        fill.active = self.clear_inner or self.clear_outer  # see fill_applies
+        fill.prop(self, "use_fill")
         layout.prop(self, "clear_inner")
         layout.prop(self, "clear_outer")
         col = layout.column(heading="Mirror")

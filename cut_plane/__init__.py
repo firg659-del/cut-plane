@@ -23,7 +23,7 @@ from .operators.rotate import (
     CutPlaneRotateZOperator,
     CutPlaneTrackballOperator,
 )
-from .operators.reset import CutPlaneResetOperator
+from .operators.reset import CutPlaneAlignOperator, CutPlaneResetOperator
 from .operators.scale import CutPlaneScalePlaneOperator
 from .operators.undo import CutPlaneRedoOperator, CutPlaneUndoOperator
 from .state.properties import (
@@ -59,6 +59,7 @@ _classes = (
     CutPlaneMoveCenterOperator,
     CutPlaneScalePlaneOperator,
     CutPlaneResetOperator,
+    CutPlaneAlignOperator,
     CutPlaneCutOperator,
     CutPlaneUndoOperator,
     CutPlaneRedoOperator,

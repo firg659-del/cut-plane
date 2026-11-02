@@ -348,20 +348,22 @@ def _draw_mirror_ghosts(context) -> None:
             (sc.mirror_x, sc.mirror_y, sc.mirror_z)) if on]
         if not axes:
             return
-        pivot, dirs = cutting._mirror_world_frame(context, sc)
-        if dirs is None:
+        refl = cutting._mirror_reflections_world(context, sc)
+        if refl is None:
             return  # no active mesh / degenerate transform - nothing to mirror
         pos, rot = pose
         world = Matrix.Translation(pos) @ rot
         matrices = [world]
         for i in axes:
-            refl = cutting._mirror_reflection_world(pivot, dirs[i])
-            matrices += [refl @ m for m in matrices]
-        seen = {cutting._coincident_plane_key(
-            world.translation, world.to_3x3() @ Vector((0.0, 0.0, 1.0)))}
+            matrices += [refl[i] @ m for m in matrices]
+
+        def normal(m):
+            # A local mirror of a sheared object is not orthogonal: the
+            # plane's normal goes through the inverse transpose.
+            return m.to_3x3().inverted().transposed() @ Vector((0.0, 0.0, 1.0))
+        seen = {cutting._coincident_plane_key(world.translation, normal(world))}
         for m in matrices[1:]:  # [0] is the real plane - the gizmo draws it
-            key = cutting._coincident_plane_key(
-                m.translation, m.to_3x3() @ Vector((0.0, 0.0, 1.0)))
+            key = cutting._coincident_plane_key(m.translation, normal(m))
             if key in seen:
                 continue    # coincides with the real plane or another ghost
             seen.add(key)

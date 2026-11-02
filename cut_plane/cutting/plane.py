@@ -12,6 +12,14 @@ from .snapshot import _snapshot_bounds
 from .state import _session_for
 
 
+def fill_applies(use_fill, clear_inner, clear_outer) -> bool:
+    """Fill caps the open edge a Clear leaves on the kept side. With
+    neither side cleared there is no open edge: native Bisect then lays one
+    face INSIDE the solid - a hidden internal wall that makes the mesh
+    non-manifold - so Cut Plane fills only together with a Clear."""
+    return use_fill and (clear_inner or clear_outer)
+
+
 def get_plane_world(context) -> Optional[Tuple[Vector, Vector]]:
     """World-space (plane_co, plane_no) of the gizmo's cutting plane.
 
@@ -128,62 +136,64 @@ def _mirror_pivot_local(obj, sc):
         return None                                  # singular transform
 
 
-def _mirror_world_frame(context, sc, pivot_local=None):
-    """(pivot, [x, y, z]) in WORLD space, taken from the ACTIVE object.
+def _mirror_reflections_world(context, sc, pivot_local=None):
+    """The three mirror reflections as WORLD matrices, from the ACTIVE
+    object - or None (no active mesh, degenerate transform).
 
-    The real plane is ONE world plane that every object in the session is
-    cut at. The mirrored planes are now derived the same way, so they are
-    one world set too. Deriving them per object in its own local axes made
-    "Mirror X" mean a different world DIRECTION for each differently
-    rotated object: measured with the plane at z=2 and Mirror Z, an
-    unrotated object mirrored to (0,0,-2) normal (0,0,-1) while one turned
-    45 deg about Y mirrored to (-2,0,0) normal (-1,0,0).
-
-    Returns (None, None) when there is no active edit object, which puts
-    the caller back on the per-object path - the same thing for a single
-    object, since it IS the active one.
+    A reflection across the active object's LOCAL x, y or z plane through
+    the Anchor: M @ flip @ M^-1. The real plane is one world plane that
+    every object in the session is cut at, and the mirrored planes are one
+    world set too: derived per object in its own axes, "Mirror X" meant a
+    different world direction for every differently rotated object
+    (measured: Mirror Z sent a plane at z=2 to z=-2 on one object and to
+    x=-2 on another turned 45 deg about Y). Reflecting orthogonally in WORLD
+    space across the image of each local axis equals this only without
+    shear: on a child rotated under a non-uniformly scaled parent the cut
+    was no local mirror (the Mirror modifier's semantics, as the tooltip
+    says).
     """
     obj = getattr(context, 'edit_object', None)
     if obj is None or getattr(obj, 'type', None) != 'MESH':
-        return None, None
-    piv_l = pivot_local if pivot_local is not None else _mirror_pivot_local(obj, sc)
+        return None
     mw = obj.matrix_world
-    pivot = mw @ (piv_l if piv_l is not None else Vector((0.0, 0.0, 0.0)))
-    rot = mw.to_3x3()
-    dirs = []
+    if abs(mw.to_3x3().determinant()) < 1e-12:
+        return None                       # degenerate transform - skip mirroring
+    piv_l = pivot_local if pivot_local is not None else _mirror_pivot_local(obj, sc)
+    pivot = piv_l if piv_l is not None else Vector((0.0, 0.0, 0.0))
+    inv = mw.inverted()
+    out = []
     for i in range(3):
-        axis = Vector((0.0, 0.0, 0.0))
-        axis[i] = 1.0
-        d = rot @ axis
-        if d.length_squared < 1e-12:
-            return None, None            # degenerate transform - skip mirroring
-        dirs.append(d.normalized())
-    return pivot, dirs
+        flip = Matrix.Identity(4)
+        flip[i][i] = -1.0
+        flip[i][3] = 2.0 * pivot[i]
+        out.append(mw @ flip @ inv)
+    return out
+
+
+def reflect_plane(refl: Matrix, co: Vector, no: Vector):
+    """A plane through a reflection matrix: points map directly, normals by
+    the inverse transpose (the matrix need not be orthogonal)."""
+    n = refl.to_3x3().inverted().transposed() @ no
+    return refl @ co, n.normalized()
 
 
 def _mirrored_planes_world(context, co_w: Vector, no_w: Vector, axes, sc,
                            pivot_local=None) -> list:
-    """The mirrored planes in WORLD space - one set for the whole session."""
-    pivot, dirs = _mirror_world_frame(context, sc, pivot_local)
-    if dirs is None:
+    """The mirrored planes in WORLD space - one set for the whole session,
+    deduped by the geometric plane exactly like _mirrored_planes_local."""
+    refl = _mirror_reflections_world(context, sc, pivot_local)
+    if refl is None or not axes:
         return [(co_w, no_w)]
-    return _mirrored_planes_local(co_w, no_w, axes, pivot, dirs)
-
-
-def _mirror_reflection_world(pivot: Vector, m: Vector) -> Matrix:
-    """World reflection across the plane through `pivot` with normal `m`.
-
-    The ghosts need a full matrix, not a (point, normal): the drawn
-    rectangle carries the plane's in-plane orientation too.
-    """
-    r = Matrix.Identity(4)
-    for i in range(3):
-        for j in range(3):
-            r[i][j] = (1.0 if i == j else 0.0) - 2.0 * m[i] * m[j]
-    off = 2.0 * pivot.dot(m)
-    for i in range(3):
-        r[i][3] = off * m[i]
-    return r
+    planes = [(co_w, no_w)]
+    for i in axes:
+        planes += [reflect_plane(refl[i], co, no) for co, no in list(planes)]
+    out, seen = [], set()
+    for co, no in planes:
+        k = _coincident_plane_key(co, no)
+        if k not in seen:
+            seen.add(k)
+            out.append((co, no))
+    return out
 
 
 def _mirror_pivot_key(obj, sc) -> tuple:

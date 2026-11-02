@@ -185,7 +185,16 @@ class _FakeCutOp:
     select_loop = True
     mirror_x = mirror_y = mirror_z = False
     plane_anchor = 'BBOX'
+    cursor_world = (0.0, 0.0, 0.0)
+    bbox_anchor_world = (0.0, 0.0, 0.0)
     _bisect_object = CutPlaneCutOperator._bisect_object
+
+    class properties:
+        """The real Operator.properties interface: nothing passed explicitly,
+        so execute() resolves the anchor points itself, like a scripted call."""
+        @staticmethod
+        def is_property_set(_name):
+            return False
 
     def report(self, *_a):
         pass

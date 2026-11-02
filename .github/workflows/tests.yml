@@ -111,7 +111,12 @@ jobs:
                   handler_leak rotate_handover mirror_ghosts
                   watchdog_windows save_roundtrip hidpi_scaling
                   move_stability mirror_self_reflection mirror_hint
-                  plane_anchor"
+                  plane_anchor fill_attributes hidden_geometry vertex_touch
+                  mirror_bbox_anchor edit_mode_exports first_center
+                  foreign_edits undo_resurrection edit_mode_bench
+                  edit_mode_selection modal_exits drag_pacing edit_mode_modes
+                  mirror_refresh clip_parity
+                  align_keys"
           fails=0
           for t in $SUITES; do
             out=$("$BLENDER" --background --factory-startup \

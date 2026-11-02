@@ -3,6 +3,81 @@
 User-facing changes to Cut Plane. Versions match `blender_manifest.toml`;
 entries are written to be paste-ready for store update notes.
 
+## 1.2.0 - 2026-11-02
+- **Pick the cutting plane in one key: XY, XZ or YZ.** Shift+Z lays the
+  plane in the world XY plane, Shift+Y in XZ and Shift+X in YZ, keeping
+  its position - the same keys that leave an axis out in a native move.
+  Rebindable in the tool's shortcut list like the others.
+- **Undo no longer brings back a cut that was never made.** An undo
+  step taken while the preview showed - a click-select, Tab out of
+  Edit Mode - stored the preview, so a later Ctrl+Z could turn the
+  un-executed cut into real geometry, including everything a Clear had
+  removed. Such a cut is now reverted as the undo lands.
+- **Edits made while the preview shows are kept.** A move from the
+  Mesh menu, Flip Normals, Shade Smooth, a material, UV Unwrap, seams
+  or sharp edges were silently reverted by the next plane move, by
+  leaving the tool, by Tab and by saving. The mesh now stays exactly as
+  you see it, preview included, as it always did for an extrude.
+- **Exports never contain the uncommitted cut.** While File > Export
+  (or any file browser) is open, the preview pauses and the mesh shows
+  its original shape; it comes back when the browser closes. STL, PLY,
+  USD, Alembic and Collada exports used to write the cut.
+- **Dragging stays fluid on dense meshes.** Every mouse move used to re-cut
+  the whole mesh, so on a mesh of 100k+ faces the plane and the viewport
+  froze for seconds (a 2-second drag took 32 s at 126k faces, 59 s at
+  250k). The plane now follows the mouse; the cut catches up when the mouse
+  rests and is always exact on release (4-5 s for the same drags).
+- **The live cut itself is faster on dense meshes.** Each re-cut rebuilt and
+  cut the whole mesh; it now builds only what survives the cut, straight
+  from the original, with the same result. While you move the plane, a
+  re-cut costs what the cut touches rather than the whole mesh: at 126k
+  faces 280 -> about 55 ms (the preview went from ~4 to ~13 updates a
+  second), at 31k faces about 18 ms.
+- **Your selection survives a cut exactly as you made it.** In Vertex
+  select mode Cut deselected every face it split, while the preview showed
+  them selected; a plane along existing edges selected the faces next to
+  them; Face mode picked up stray edges; and selecting something during the
+  preview could leave a stray column of the old cut loop selected, lose a
+  click on a concave or twisted face, or drop what was selected on the
+  cleared side. The preview and Cut now always agree, in every select mode.
+- **Fill matches native Bisect:** caps face outward and take the
+  neighbouring faces' material, smooth shading and UVs.
+- **Fill works with Clear Inner or Clear Outer.** With both sides kept,
+  Fill used to add a face inside the mesh - an invisible internal wall
+  that made it non-manifold. Fill is now dimmed until a side is cleared.
+- **Fill caps look the same in the preview and after Cut.** Where a cap
+  borders faces of different materials, the preview and Cut could give it
+  different materials and UVs. A cap now takes the most common material
+  around it (ties go to the lowest slot), in both.
+- **No more sliver triangles.** A plane passing within a hair of a vertex
+  split the edge right beside it, leaving a near-zero triangle there.
+  Vertices that close now count as on the plane, as in native Bisect.
+- **Hidden geometry is never cut or cleared**, in the preview or by
+  Execute, like native Bisect.
+- **Mirror** cuts in the object's own space on an object under a
+  non-uniformly scaled parent (it cut a skewed copy there), follows the 3D
+  cursor at once when Anchor is the cursor, and no longer turns the preview
+  off as "too dense" for a mirror that adds no cut.
+- **Mirror with the Bounding Box anchor** cuts where the preview showed
+  after an earlier cut in the same Edit Mode session; the mirrored cut
+  could land outside the mesh and vanish.
+- A plane through a single vertex with a Clear on no longer stops with
+  an error, and keeps that vertex, like native Bisect.
+- Leaving the tool no longer leaves the mesh with no selection mode.
+- **Shift during a locked move follows the mouse as natively.** With
+  G locked to a plane (Shift+X/Y/Z) or an axis (X/Y/Z), Precision was
+  applied to the result instead of the mouse, so at a shallow view the
+  plane raced ahead of the cursor and kept speeding up. It now moves
+  exactly as Blender's own move does.
+- **Typed values during a drag:** an axis key or Space after a number
+  (G 2 X, R 90 Space) works as natively instead of resetting the
+  plane; "/" inverts the degrees you typed (R 4 / is a quarter degree);
+  the numpad decimal key types a point on comma-decimal keyboards.
+- With a Clear on, a fresh plane starts at the mesh centre again (on
+  Blender 5.1 and later it started at the centre of the cut half).
+- A transform that stops on an internal error puts the plane back where
+  the drag started and clears its overlays, as Esc does.
+
 ## 1.1.0 — 2026-08-29
 - **Mirror no longer deletes the mesh.** A plane that a mirror
   reflects onto ITSELF was expanded into two cuts of the same plane

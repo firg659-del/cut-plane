@@ -422,9 +422,14 @@ X/Y/Z — axis constraint, Shift — precision, Ctrl — snap, or type a distanc
         self.prev_mouse_x = self.init_mouse_x
         self.prev_mouse_y = self.init_mouse_y
 
-        # Free-move precision tracking (prevents jumps when toggling Shift)
-        self._prev_free_delta = Vector((0.0, 0.0, 0.0))
-        self._free_precision_offset = Vector((0.0, 0.0, 0.0))
+        # Free-move precision (Shift) as native does it: a VIRTUAL cursor
+        # that moves at 10% while Shift is held, and every tracking mode
+        # maps that cursor. Scaling the result in world space instead
+        # evaluated the plane lock's ray at the REAL cursor - at a grazing
+        # view that mapping races toward the horizon, so a Shift+Z drag ran
+        # ~2x ahead of native and kept accelerating (measured at 6 deg).
+        self._vm_prev = Vector((self.init_mouse_x, self.init_mouse_y))
+        self._vm_offset = Vector((0.0, 0.0))
 
         # Numeric type-in: one value per free axis, Tab switches between
         # them (native multi-value input). Plane handlers have 2 free
@@ -511,7 +516,7 @@ X/Y/Z — axis constraint, Shift — precision, Ctrl — snap, or type a distanc
                     for a in self._free_axes]
         return []
 
-    def _free_screen_delta(self, context, event) -> Optional[Vector]:
+    def _free_screen_delta(self, context, mouse) -> Optional[Vector]:
         """Unconstrained free-move delta: screen-space reprojection (the plane
         stays exactly under the cursor in perspective). None = skip frame."""
         start_pos = self.start_pos_world
@@ -519,28 +524,31 @@ X/Y/Z — axis constraint, Shift — precision, Ctrl — snap, or type a distanc
             context.region, context.region_data, start_pos)
         if screen_pos is None:
             return None  # anchor behind the camera
-        new_screen = (screen_pos[0] + event.mouse_region_x - self.init_mouse_x,
-                      screen_pos[1] + event.mouse_region_y - self.init_mouse_y)
+        new_screen = (screen_pos[0] + mouse[0] - self.init_mouse_x,
+                      screen_pos[1] + mouse[1] - self.init_mouse_y)
         new_pos_world = view3d_utils.region_2d_to_location_3d(
             context.region, context.region_data, new_screen, start_pos)
         if not new_pos_world:
             return None
         return new_pos_world - start_pos
 
-    def _mouse_ray(self, context, event):
-        """(origin, direction) of the mouse ray for the current event."""
-        mouse = (event.mouse_region_x, event.mouse_region_y)
+    def _mouse_ray(self, context, event, mouse=None):
+        """(origin, direction) of the mouse ray for the current event, or
+        through `mouse` (region pixels) - the free move's virtual cursor."""
+        if mouse is None:
+            mouse = (event.mouse_region_x, event.mouse_region_y)
         return (view3d_utils.region_2d_to_origin_3d(context.region, context.region_data, mouse),
                 view3d_utils.region_2d_to_vector_3d(context.region, context.region_data, mouse))
 
-    def _mouse_plane_intersect(self, context, event, normal: Vector) -> Optional[Vector]:
+    def _mouse_plane_intersect(self, context, event, normal: Vector,
+                               mouse=None) -> Optional[Vector]:
         """Mouse-ray intersection with the constraint plane through the drag
         anchor, or None when the ray is (near-)parallel to the plane.
 
         THE plane-tracking math - shared by the square plane handlers and the
         keyboard Shift+X/Y/Z plane lock (one implementation, two entry points).
         """
-        ray_origin, ray_dir = self._mouse_ray(context, event)
+        ray_origin, ray_dir = self._mouse_ray(context, event, mouse)
         denom = ray_dir.dot(normal)
         if abs(denom) < PARALLEL_EPSILON:
             return None
@@ -561,7 +569,7 @@ X/Y/Z — axis constraint, Shift — precision, Ctrl — snap, or type a distanc
             return None
         return hit
 
-    def _kb_axis_delta(self, context, event, axis_vec: Vector) -> Optional[Vector]:
+    def _kb_axis_delta(self, context, event, axis_vec: Vector, mouse) -> Optional[Vector]:
         """Rail movement for the keyboard AXIS constraint - the SAME math as
         the arrow handles: the plane rides the point on the axis closest to
         the mouse ray, so it tracks the cursor 1:1 (native G->X feel).
@@ -571,7 +579,7 @@ X/Y/Z — axis constraint, Shift — precision, Ctrl — snap, or type a distanc
         reference, so subsequent motion is relative - no teleport under the
         cursor, exactly like native.
         """
-        ray_origin, ray_dir = self._mouse_ray(context, event)
+        ray_origin, ray_dir = self._mouse_ray(context, event, mouse)
         current = _ray_line_closest_point(
             ray_origin, ray_dir, self.start_pos_world, axis_vec)
         if current is None:
@@ -581,11 +589,11 @@ X/Y/Z — axis constraint, Shift — precision, Ctrl — snap, or type a distanc
             self._kb_base = axis_vec * self.accumulated_delta.dot(axis_vec)
         return self._kb_base + (current - self._kb_ref)
 
-    def _kb_plane_delta(self, context, event, normal: Vector) -> Optional[Vector]:
+    def _kb_plane_delta(self, context, event, normal: Vector, mouse) -> Optional[Vector]:
         """Ray-plane movement for the keyboard PLANE lock - the same math as
         the square plane handlers: the cursor's intersection with the
         constraint plane drives the motion. Engage semantics as the axis case."""
-        current = self._mouse_plane_intersect(context, event, normal)
+        current = self._mouse_plane_intersect(context, event, normal, mouse)
         if current is None:
             return None  # view edge-on to the plane - skip frame
         if self._kb_ref is None:
@@ -602,34 +610,31 @@ X/Y/Z — axis constraint, Shift — precision, Ctrl — snap, or type a distanc
         ray-plane intersection (identical to the square handles). The X/Y/Z
         key handler calls this with the KEY event so engaging applies at once.
         """
+        # Precision: advance the virtual cursor at 10% while Shift is held
+        # (see setup). Toggling Shift never jumps - the offset only grows
+        # by the motion made while it was down.
+        real = Vector((event.mouse_region_x, event.mouse_region_y))
+        if event.shift:
+            self._vm_offset += (real - self._vm_prev) * (1.0 - MOVE_PRECISION_FAC)
+        self._vm_prev = real
+        mouse = real - self._vm_offset
+
         axis_vec = plane_normal = None
         if self._kb_constraint is not None:
             kind, axis_id, space = self._kb_constraint
             if kind == 'AXIS':
                 axis_vec = self._kb_axis_world(axis_id, space)
-                raw_delta = self._kb_axis_delta(context, event, axis_vec)
+                raw_delta = self._kb_axis_delta(context, event, axis_vec, mouse)
             else:
                 plane_normal = self._kb_axis_world(axis_id, space)
-                raw_delta = self._kb_plane_delta(context, event, plane_normal)
+                raw_delta = self._kb_plane_delta(context, event, plane_normal, mouse)
         else:
-            raw_delta = self._free_screen_delta(context, event)
+            raw_delta = self._free_screen_delta(context, mouse)
         if raw_delta is None:
             return  # degenerate view for this tracking mode - skip frame
+        self._kb_switched = False
 
-        # Precision (Shift) with offset accumulation - no jumps. A constraint
-        # switch changes the tracking basis, so resync the previous-delta
-        # tracker to avoid a spurious precision spike on that event.
-        if self._kb_switched:
-            self._prev_free_delta = raw_delta.copy()
-            self._kb_switched = False
-        frame_delta = raw_delta - self._prev_free_delta
-        self._prev_free_delta = raw_delta.copy()
-        if event.shift:
-            self._free_precision_offset += frame_delta * (1.0 - MOVE_PRECISION_FAC)
-        raw_delta = raw_delta - self._free_precision_offset
-
-        # The precision offset may carry an off-constraint residue from before
-        # the switch - re-project so the constraint is guaranteed.
+        # Guarantee the constraint against float drift in the tracking.
         if axis_vec is not None:
             raw_delta = axis_vec * raw_delta.dot(axis_vec)
         elif plane_normal is not None:

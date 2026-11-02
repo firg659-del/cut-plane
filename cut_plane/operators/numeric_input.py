@@ -23,6 +23,8 @@ Expression mode (native: ``=`` or numpad ``*``):
 Ctrl-C copies the input, Ctrl-V pastes (sanitized) - like native.
 """
 
+import math
+
 import bpy
 
 from .utils import ctrl_like
@@ -33,6 +35,10 @@ _EXPRESSION_TRIGGERS = {'=', '*', '+', '('}
 _EXPRESSION_CHARS = {'+', '-', '*', '/', '(', ')', '.', ',', ' ', '%', "'", '"'}
 # Maximum characters accepted from a clipboard paste
 _PASTE_MAX_CHARS = 64
+# Never unit suffixes in simple mode: X/Y/Z must reach the modal as axis
+# constraints and Space as confirm, as natively (1.1.0 took "2x" for a unit
+# and the plane snapped back). Only "yd" uses one of them - "=2yd" still works.
+_MODAL_CHARS = {'x', 'y', 'z', ' '}
 
 
 # Scene length_unit enum -> the unit token bare typed numbers mean (native
@@ -114,6 +120,11 @@ class NumericInput:
         if self.invert:
             if abs(value) < 1e-12:
                 return None  # 1/0 - treat as not-yet-valid input
+            if category == 'ROTATION' and not _rotation_in_radians(context):
+                # Native inverts the DEGREES typed (numinput.cc, #53463):
+                # "4 /" is a quarter degree, not 1/(4 degrees in radians),
+                # which turned the plane 820.7 degrees.
+                return math.radians(1.0 / math.degrees(value))
             value = 1.0 / value
         return value
 
@@ -214,7 +225,10 @@ class NumericInput:
                 return True
             return False
 
-        ch = event.unicode
+        # Native forces '.' for both period keys in every mode (#37992): on
+        # comma-decimal layouts the numpad key types ',', which an
+        # expression would read as a tuple separator.
+        ch = '.' if event.type in {'PERIOD', 'NUMPAD_PERIOD'} else event.unicode
         if not ch:
             return False
 
@@ -228,9 +242,8 @@ class NumericInput:
 
         # --- Simple mode ---
         if ch == ',':
-            # Native numinput reads the comma as a decimal point (European
-            # keyboards); expression mode keeps it literal (unit-parser
-            # punctuation), so normalize here only.
+            # A comma key is a decimal point here (European keyboards);
+            # expression mode keeps it literal (unit-parser punctuation).
             ch = '.'
         if ch.isdigit() or ch == '.':
             self.buffer += ch
@@ -254,10 +267,18 @@ class NumericInput:
                 self.buffer += ch
             self.reset_stage = False
             return True
-        if self.allow_units and self.buffer and (ch.isalpha() or ch in {' ', "'", '"'}):
+        if (self.allow_units and self.buffer and ch.lower() not in _MODAL_CHARS
+                and (ch.isalpha() or ch in {"'", '"'})):
             # Unit suffix characters ("25cm", "45d") - once typing started
             self.buffer += ch
             return True
+        return False
+
+
+def _rotation_in_radians(context) -> bool:
+    try:
+        return context.scene.unit_settings.system_rotation == 'RADIANS'
+    except AttributeError:
         return False
 
 

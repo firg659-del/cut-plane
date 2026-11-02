@@ -33,8 +33,8 @@ from bpy.types import AddonPreferences
 from ..lib.constants import CUT_PREVIEW_MAX_FACES, logger
 
 # (label, idname, mode) - the bindings worth surfacing here, in panel order.
-# mode disambiguates the three reset items, which share one idname and differ
-# only by their keymap-set 'mode' property. Everything omitted (the four
+# mode disambiguates items sharing one idname by their keymap-set property:
+# the three resets ('mode') and the three aligns ('axis'). Everything omitted (the four
 # box-select drags, the NUMPAD_ENTER cut alias) stays editable in
 # Preferences > Keymap, which the signpost below names.
 _KEY_ROWS = (
@@ -44,6 +44,9 @@ _KEY_ROWS = (
     ("Reset Location", "view3d.cut_plane_reset", 'LOCATION'),
     ("Reset Rotation", "view3d.cut_plane_reset", 'ROTATION'),
     ("Reset Scale", "view3d.cut_plane_reset", 'SCALE'),
+    ("Align XY", "view3d.cut_plane_align", 'Z'),
+    ("Align XZ", "view3d.cut_plane_align", 'Y'),
+    ("Align YZ", "view3d.cut_plane_align", 'X'),
     ("Cut", "view3d.cut_plane_cut", None),
     ("Undo", "view3d.cut_plane_undo", None),
     ("Redo", "view3d.cut_plane_redo", None),
@@ -133,11 +136,9 @@ def _row_item(km, idname, mode):
             continue
         if mode is None:
             return kmi
-        try:
-            if kmi.properties.mode == mode:
-                return kmi
-        except (AttributeError, TypeError):
-            continue
+        props = kmi.properties
+        if mode in (getattr(props, 'mode', None), getattr(props, 'axis', None)):
+            return kmi
     return None
 
 

@@ -296,7 +296,11 @@ class CutPlaneTool(WorkSpaceTool):
         # the native edit-tool header style (knife, inset), and the exact
         # names native Bisect uses.
         layout.separator()
-        layout.prop(props, "cut_use_fill")
+        fill = layout.row()
+        # Dimmed, not hidden: Fill needs a Clear (cutting.fill_applies), and
+        # the setting comes back the moment a side is cleared.
+        fill.active = props.cut_clear_inner or props.cut_clear_outer
+        fill.prop(props, "cut_use_fill")
         layout.prop(props, "cut_clear_inner")
         layout.prop(props, "cut_clear_outer")
         # Mirror toggles, sculpt-symmetry style: icon + compact X Y Z row,
@@ -338,7 +342,9 @@ class CutPlaneTool(WorkSpaceTool):
         row.popover(panel="CUT_PLANE_PT_snapping", text="Targets")
 
         col = layout.column(heading="Cut")
-        col.prop(props, "cut_use_fill")
+        fill = col.row()
+        fill.active = props.cut_clear_inner or props.cut_clear_outer
+        fill.prop(props, "cut_use_fill")
         col.prop(props, "cut_clear_inner")
         col.prop(props, "cut_clear_outer")
         col.prop(props, "cut_selected_only")
@@ -416,6 +422,18 @@ _TOOL_KEYMAP_BASE = (
      {"properties": [("mode", 'ROTATION')]}),
     ("view3d.cut_plane_reset", {"type": 'S', "value": 'PRESS', "alt": True},
      {"properties": [("mode", 'SCALE')]}),
+    # Lay the plane in a world plane, named as in a native transform: Shift
+    # + the axis LEFT OUT (Shift+Z = XY). Shift+X / Shift+Y are free in Edit
+    # Mesh; Shift+Z shadows the wireframe toggle (km_view3d) while the tool
+    # is active - as Alt+R shadows spin. Inside a running transform the
+    # same chords stay the native plane constraints: the modal sees them
+    # first.
+    ("view3d.cut_plane_align", {"type": 'X', "value": 'PRESS', "shift": True},
+     {"properties": [("axis", 'X')]}),
+    ("view3d.cut_plane_align", {"type": 'Y', "value": 'PRESS', "shift": True},
+     {"properties": [("axis", 'Y')]}),
+    ("view3d.cut_plane_align", {"type": 'Z', "value": 'PRESS', "shift": True},
+     {"properties": [("axis", 'Z')]}),
     # Tool-scoped undo: plane moves pop first, then native undo takes
     # over (operators/undo.py + pose_history). Shadows the global
     # Ctrl+Z ONLY while this tool is active - everywhere else one press

@@ -7,9 +7,10 @@ rules keep cross-module state truthful:
 
   * containers (_sessions, and the cache objects inside it) are only ever
     mutated IN PLACE, so ``from .state import _sessions`` aliases stay live;
-  * SCALARS (_op_pending, _pending_action, _last_tool_active) are reassigned,
-    so writers and readers in other modules must use ``state.<name>``
-    attribute access - a ``from``-import would freeze the import-time value.
+  * SCALARS (_op_pending, _pending_action, _last_tool_active, _input_owned,
+    _dialog_resume) are reassigned, so writers and readers in other modules
+    must use ``state.<name>`` attribute access - a ``from``-import would
+    freeze the import-time value.
 """
 
 from typing import Optional
@@ -30,6 +31,7 @@ class CutPreviewCache:
     def reset(self) -> None:
         self.live_active: bool = False
         self.live_snapshot = None              # bpy Mesh datablock (the original)
+        self.token: Optional[str] = None       # the snapshot's token (marker name)
         # Local-space bbox centre of that snapshot, for a BBOX anchor. Cached
         # because its readers are HOT - the preview dirty key every frame and
         # the header warning every redraw - while the snapshot it measures
@@ -37,7 +39,26 @@ class CutPreviewCache:
         # uncached on a 40k-vert mesh: 483 ms/frame preview and 182 ms per
         # redraw. Dropped wherever live_snapshot is.
         self.snapshot_bbox_center = None
+        # True when the snapshot has any hidden element: the preview then
+        # cuts only visible geometry and clears face by face, like Execute.
+        # Read off the snapshot's .hide_* attributes, which Blender writes
+        # only when something is hidden (verified 4.5 / 5.2) - O(1) per frame.
+        self.snapshot_has_hidden: bool = False
         self.live_bvh = None                   # BVHTree of the snapshot (for snapping)
+        # The fast cut's flat arrays of THIS snapshot (clip.ClipArrays), False
+        # when it cannot be served that way, None until asked; and the
+        # (stamp, arrays) the split plan reads. Both dropped with the snapshot.
+        self.clip_arrays = None
+        self.split_arrays = None
+        self.clip_scratch = None               # the fast cut's scratch Mesh
+        # Mid-drag only: the snapshot sorted along the plane normal
+        # (clip.ClipFrame, keyed by that normal) and the normal of the last
+        # move - a frame is built once a normal repeats (a translate).
+        self.clip_frames = {}
+        self.clip_last_normal = None
+        # True while the mesh shows a Fill cap the fast cut made mid-drag:
+        # end_owned_input re-cuts it exactly (see preview._apply_live_cut).
+        self.fill_tied = False
         # Object identity by session_uid, NOT name: renaming the object mid-preview
         # must not orphan the session (a name lookup silently baked the preview cut).
         self.live_object_uid: Optional[int] = None
@@ -45,6 +66,12 @@ class CutPreviewCache:
         # (verts, edges, faces) as WE last wrote them. A mismatch means the user
         # edited the mesh during the preview - rebase instead of discarding it.
         self.expected_counts: Optional[tuple] = None
+        # Content fingerprint of the mesh as WE last left it: the foreign-
+        # edit check for edits that keep the counts. None = not recorded
+        # (counts only); fp_stale = written while a plane transform owned
+        # the input, recorded when it lets go (see snapshot.content_fingerprint).
+        self.content_fp: Optional[bytes] = None
+        self.fp_stale: bool = False
         # Per-type SELECTION counts as we last wrote them (and as stored in
         # the snapshot). A mismatch means the user changed the selection -
         # adopt or remap it into the baseline instead of letting a rebuild
@@ -87,6 +114,31 @@ _pending_action: Optional[str] = None
 # context). The undo/redo handler may be region-less, so it reads this cached
 # flag to gate its blink-mitigation re-apply instead of re-deriving tool-active.
 _last_tool_active = False
+
+# Undo steps pushed while a preview shows (a click-select, Tab out) store
+# the preview mesh, and undoing back to one used to make the never-executed
+# cut real. So every preview write tags the mesh with a face layer named
+# _MARKER_PREFIX + its snapshot's token; a mesh that comes back through
+# undo/redo carrying one is repaired from that snapshot, which the same
+# undo step brings back into bpy.data (see snapshot.repair_marked_mesh).
+_MARKER_PREFIX = ".cutplane_pv_"
+# Containers, mutated in place: meshes (by session_uid) that ever carried a
+# marker, and per token the content fingerprints of the preview states
+# written with it - the repair only replaces a mesh that is exactly one of
+# them, never one the user edited on top of the preview.
+_marked_mesh_uids = set()
+_written_fps = {}
+
+# True while one of the plane transforms runs: a blocking modal consumes
+# every event, so nothing but the tool can edit the mesh, and the per-frame
+# writes skip the content fingerprint (begin/end_owned_input in preview).
+_input_owned = False
+
+# Set while the preview is paused for an operator's file browser (see
+# dialogs): how to bring it back once the browser closes - ('apply', None),
+# or ('readopt', {session_uid: live_key}) for sessions that sat at the armed
+# baseline Execute Cut leaves. None = not paused.
+_dialog_resume: Optional[tuple] = None
 
 
 def _session_for(obj):

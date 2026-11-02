@@ -539,6 +539,13 @@ sc = bpy.context.window_manager.cut_plane
 
 def erosion_cube(name):
     ob = fresh_cube(name)
+    # FACE select mode: these triggers deselect single FACES, a face-mode
+    # action. In vertex mode a face whose verts are all selected IS
+    # selected, so deselect_one() picked the same face twice (measured) and
+    # trigger 2 never removed a second face. 1.1.0 passed only because its
+    # preview rebuild wiped the edit mesh's select mode to empty; the
+    # rebuild now keeps the user's mode.
+    bpy.ops.mesh.select_mode(type='FACE')
     for _ in range(3):
         bpy.ops.mesh.subdivide()
     bpy.ops.mesh.select_all(action='SELECT')

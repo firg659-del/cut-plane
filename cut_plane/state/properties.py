@@ -14,7 +14,6 @@ from ..lib.constants import (
     on_internal_error,
 )
 from ..lib.math_utils import (
-    anchor_center_offset,
     flat_to_matrix,
     get_current_orientation_type,
     orientation_with_rotate_override,
@@ -151,11 +150,15 @@ def ensure_default_center(context) -> None:
               and tuple(props.center_offset) == (0.0, 0.0, 0.0))
     if not virgin:
         return
-    props.center_offset = anchor_center_offset(
-        edit_obj, props.plane_anchor, context)
+    # The ORIGINAL's box, like Reset: the watchdog's first apply runs before
+    # this timer, so with a Clear on, obj.bound_box is already the cut half
+    # (measured on 5.1 and 5.2: a default cube got its plane at z -0.5; 4.5's
+    # box lagged a turn and read the original by luck).
+    from .. import cutting
+    props.center_offset = cutting.baseline_center_offset(
+        edit_obj, props.plane_anchor)
     # Same rule as every plane-moving write path: the preview only follows
     # the plane via explicit refreshes. Timers are write-safe.
-    from .. import cutting
     try:
         cutting.update_live_preview(context)
     except Exception:
@@ -307,7 +310,9 @@ class CutPlaneProperties(bpy.types.PropertyGroup):
     )
     cut_use_fill: bpy.props.BoolProperty(
         name="Fill",
-        description="Cap the cut cross-section with new faces",
+        description="Cap the cut on the side you keep with new faces. "
+                    "Works with Clear Inner or Clear Outer: with both sides "
+                    "kept there is no open edge to close",
         default=False,
         update=update_cut_option,
     )

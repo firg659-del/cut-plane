@@ -152,6 +152,10 @@ PLANE_ANCHOR_ITEMS = (
 # Numerical precision constants
 ZERO_EPSILON = 1e-10      # Threshold for near-zero checks (axis length, etc.)
 PARALLEL_EPSILON = 1e-6   # Threshold for parallel line/plane checks
+# Vertices this close to the plane count as ON it, so no edge is split a
+# hair beside an existing vertex. Native Bisect's default threshold: with
+# 1e-5 a plane passing 4e-5 from a vertex left a sliver triangle there.
+BISECT_DIST = 1e-4
 
 
 # Cached constant rotation matrices (computed once at module load)

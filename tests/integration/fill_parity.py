@@ -161,7 +161,9 @@ def main():
         for name, build in CASES:
             uniq = f"{name.replace(' ', '_')}_{clear_outer}"
             ours = addon_fill_caps(build, clear_outer, "a_" + uniq)
-            native = native_fill_caps(build, clear_outer, "n_" + uniq)
+            # With both sides kept native lays a cap INSIDE the solid; Cut
+            # Plane fills only with a Clear (cutting.fill_applies): 0 caps.
+            native = native_fill_caps(build, clear_outer, "n_" + uniq) if clear_outer else 0
             tag = "clear" if clear_outer else "keep "
             status = "ok" if ours == native else "FAIL"
             print(f"[{tag}] {name:27} addon={ours} native={native}  {status}")

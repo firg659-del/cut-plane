@@ -4,10 +4,10 @@ but does NOT select the segment between two accumulated cut loops.
 
     blender --background --factory-startup --python tests/integration/repair_selection.py
 
-The vertex branch of repair_split_selection must key off SIBLING agreement (was
-the source edge selected -> keep both halves), not off neighbour verts being
-selected. Otherwise cutting a new line between two already-selected cut loops
-selects the in-between edge, because both its endpoints are selected cut-verts.
+A new cut vertex is selected exactly when the edge it split was selected -
+read from the UNCUT mesh (cutting.SplitPlan), never from the neighbour verts:
+both endpoints of the segment between two accumulated cut loops are selected
+cut verts, yet the segment itself never was.
 
 Exit code 0 on success, 1 with the failed checks listed.
 """
@@ -15,6 +15,7 @@ import os
 import sys
 
 import bmesh
+from mathutils import Vector
 
 ADDON = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if ADDON not in sys.path:
@@ -23,6 +24,7 @@ if ADDON not in sys.path:
 from cut_plane import cutting  # noqa: E402
 
 failures = []
+CO, NO = Vector((1.0, 0.0, 0.0)), Vector((1.0, 0.0, 0.0))
 
 
 def check(name, cond, detail=""):
@@ -31,49 +33,30 @@ def check(name, cond, detail=""):
         failures.append(name)
 
 
-def genuine_case():
-    """A SELECTED source edge is cut across -> both halves must stay selected."""
+def cut_segment(edge_selected):
+    """A segment a-b crossing the plane x = 1, its endpoints selected, the
+    segment itself selected or not; cut, repaired. Returns the halves'
+    selection."""
     bm = bmesh.new()
     a = bm.verts.new((0, 0, 0))
     b = bm.verts.new((2, 0, 0))
-    c = bm.verts.new((1, 0, 0))
-    d = bm.verts.new((1, 1, 0))
-    e1 = bm.edges.new((a, c))
-    e2 = bm.edges.new((c, b))
-    loop = bm.edges.new((c, d))
-    # Source edge was selected: bisect kept ONE half's flag (e1), endpoints selected.
-    a.select_set(True)
-    b.select_set(True)
-    e1.select_set(True)
-    cutting.repair_split_selection([c, loop])  # geom_cut = cut vert + cut-loop edge
-    both = e1.select and e2.select
+    edge = bm.edges.new((a, b))
+    a.select = b.select = True
+    edge.select = edge_selected       # flag only: both ends stay selected
+    bm.select_mode = {'VERT'}
+    plan = cutting.split_plan_from_bmesh(bm, CO, NO, 1e-4, face_mode=False)
+    res = bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:], dist=1e-4,
+                                 plane_co=CO, plane_no=NO)
+    cutting.repair_split_selection(bm, res['geom_cut'], plan)
+    halves = [e.select for e in bm.edges]
     bm.free()
-    return both
+    return halves
 
 
-def overfire_case():
-    """The segment BETWEEN two accumulated cut loops (endpoints selected, edge
-    NOT) is cut across -> the two halves must NOT become selected."""
-    bm = bmesh.new()
-    gA = bm.verts.new((0, 0, 0))
-    gB = bm.verts.new((2, 0, 0))
-    gC = bm.verts.new((1, 0, 0))
-    gD = bm.verts.new((1, 1, 0))
-    sa = bm.edges.new((gA, gC))
-    sc = bm.edges.new((gC, gB))
-    loop = bm.edges.new((gC, gD))
-    # Accumulated cut loops selected their VERTS (gA, gB) but not this segment.
-    gA.select_set(True)
-    gB.select_set(True)
-    cutting.repair_split_selection([gC, loop])
-    leaked = sa.select or sc.select
-    bm.free()
-    return leaked
-
-
-check("genuine: cut across a SELECTED edge keeps both halves selected", genuine_case())
+check("genuine: cut across a SELECTED edge keeps both halves selected",
+      cut_segment(True) == [True, True], str(cut_segment(True)))
 check("no over-fire: segment between accumulated cut loops stays UNselected",
-      not overfire_case())
+      not any(cut_segment(False)), str(cut_segment(False)))
 
 print("\nREPAIR SELECTION:", "OK" if not failures else f"FAIL ({len(failures)}): {failures}")
 sys.exit(1 if failures else 0)

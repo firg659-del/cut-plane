@@ -86,7 +86,7 @@ preview has already cut geometry away.
 
 ## Install
 
-Download `cut_plane-1.1.0.zip` from the
+Download `cut_plane-1.2.0.zip` from the
 [latest release](https://github.com/firg659-del/cut-plane/releases) and drag it
 into Blender, or use **Edit → Preferences → Get Extensions → Install from
 Disk…**

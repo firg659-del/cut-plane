@@ -125,6 +125,50 @@ def test_units_accepted_with_allow_units():
     assert ni.buffer == "25cm"
 
 
+def test_axis_keys_and_space_are_not_unit_suffixes():
+    # 'G 2 X' must reach the modal as an X constraint and Space as confirm
+    # (native simple mode takes digits only); real unit letters still work.
+    ni = NumericInput(allow_units=True)
+    type_str(ni, "2")
+    for ch in ("x", "X", "y", "Z", " "):
+        assert ni.handle_event(ev(unicode=ch)) is False
+    assert ni.buffer == "2"
+    assert ni.handle_event(ev(unicode="c")) is True
+
+
+def test_period_keys_insert_a_point_in_every_mode():
+    # Comma-decimal layouts: the numpad key types ','. Native forces '.'.
+    ni = NumericInput()
+    ni.handle_event(ev(unicode="="))
+    type_str(ni, "1*3")
+    ni.handle_event(ev(type="NUMPAD_PERIOD", unicode=","))
+    type_str(ni, "5")
+    assert ni.buffer == "1*3.5"
+    simple = NumericInput()
+    type_str(simple, "2")
+    simple.handle_event(ev(type="PERIOD", unicode=","))
+    assert simple.buffer == "2."
+
+
+def test_rotation_inverse_is_taken_in_degrees(monkeypatch):
+    # Native inverts the degrees typed: "4 /" is 0.25 degrees, not
+    # 1/(4 degrees in radians) = 820.7 degrees. Radians scenes invert plainly.
+    import math
+
+    from cut_plane.operators import numeric_input
+    monkeypatch.setattr(numeric_input, "parse_value", lambda c, cat, text: math.radians(4.0))
+    ni = NumericInput()
+    type_str(ni, "4")
+    ni.handle_event(ev(unicode="/"))
+
+    def scene(rotation):
+        return SimpleNamespace(scene=SimpleNamespace(unit_settings=SimpleNamespace(
+            system="METRIC", system_rotation=rotation)))
+    assert ni.parse(scene("DEGREES"), "ROTATION") == pytest.approx(math.radians(0.25))
+    assert ni.parse(scene("RADIANS"), "ROTATION") == pytest.approx(1.0 / math.radians(4.0))
+    assert ni.parse(scene("DEGREES"), "LENGTH") == pytest.approx(1.0 / math.radians(4.0))
+
+
 def test_unit_letter_cannot_lead():
     ni = NumericInput(allow_units=True)
     # No digits yet -> leading letter is rejected (native: units only as suffix)
@@ -210,6 +254,13 @@ def test_ctrl_equal_leaves_expression_mode():
     assert ni.expression is False
 
 
+# Background Blender has no clipboard: inside it these three can only fail.
+_NO_CLIPBOARD = pytest.mark.skipif(
+    getattr(getattr(__import__("bpy"), "app", None), "background", False),
+    reason="background Blender has no clipboard")
+
+
+@_NO_CLIPBOARD
 def test_ctrl_c_copies_buffer():
     import bpy  # the conftest stub
     ni = NumericInput()
@@ -218,6 +269,7 @@ def test_ctrl_c_copies_buffer():
     assert bpy.context.window_manager.clipboard == "42"
 
 
+@_NO_CLIPBOARD
 def test_ctrl_v_pastes_and_detects_expression():
     import bpy
     bpy.context.window_manager.clipboard = "sqrt(2)"
@@ -227,6 +279,7 @@ def test_ctrl_v_pastes_and_detects_expression():
     assert ni.expression is True
 
 
+@_NO_CLIPBOARD
 def test_ctrl_v_plain_number_stays_simple():
     import bpy
     bpy.context.window_manager.clipboard = "123"

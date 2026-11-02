@@ -14,6 +14,143 @@ from .snap_support import _get_or_build_snapshot_bvh
 from .snapshot import _snapshot_bounds
 
 
+def face_select_mode(bm) -> bool:
+    """Face flags are the selection's truth only in pure Face select mode."""
+    mode = bm.select_mode
+    return 'VERT' not in mode and 'EDGE' not in mode
+
+
+class SplitPlan:
+    """What the selection repair must know about the UNCUT mesh, gathered
+    before a bisect (the bisect itself loses it - in Vertex select mode its
+    own flush drops every split face's selection, measured):
+
+      points    where the plane crosses each SELECTED edge - the new cut
+                vertex there must be selected (KDTree, or None);
+      existing  edges that already lay ON the plane, as position pairs - the
+                bisect reports them in geom_cut, but they split no face, so
+                the sibling rule must leave their faces alone;
+      face_mode Face select mode: face flags are the truth; otherwise the
+                verts are, and Blender's select-mode flush derives the rest.
+    """
+    __slots__ = ('points', 'existing', 'face_mode', 'tol')
+
+    def __init__(self, points, existing, face_mode, tol):
+        self.points, self.existing, self.face_mode, self.tol = points, existing, face_mode, tol
+
+
+def _edge_key(a, b):
+    a, b = tuple(float(c) for c in a), tuple(float(c) for c in b)
+    return (a, b) if a <= b else (b, a)
+
+
+def _plan(crossings, existing, face_mode, scale):
+    points = None
+    if crossings:
+        points = KDTree(len(crossings))
+        for i, co in enumerate(crossings):
+            points.insert(co, i)
+        points.balance()
+    return SplitPlan(points, existing, face_mode, max(scale, 1.0) * 1e-5)
+
+
+def split_plan_from_mesh(me, plane_co, plane_no, dist, face_mode, arrays=None):
+    """SplitPlan from a Mesh in sync with the bmesh about to be cut (the
+    preview's snapshot, Execute's synced edit mesh) - vectorised: the
+    per-move preview cannot afford a Python walk over every edge.
+    `arrays` caches (positions, edge vertex pairs) for an unchanging mesh."""
+    import numpy as np
+    if arrays is None:
+        pos = np.empty(len(me.vertices) * 3, np.float32)
+        me.vertices.foreach_get('co', pos)
+        # intc, not int32: on Windows int32's buffer format is 'l', which
+        # foreach_get walks item by item - 100x slower (see clip._LAYOUT).
+        ev = np.empty(len(me.edges) * 2, np.intc)
+        me.edges.foreach_get('vertices', ev)
+        arrays = (pos.reshape(-1, 3).astype(np.float64), ev.reshape(-1, 2))
+    pos, ev = arrays
+    # The '.select_edge' attribute reads as one array; MeshEdge.select goes
+    # through RNA per edge (41 ms at 250k edges, measured). The attribute is
+    # missing when nothing is selected - and on a mesh just synced from Edit
+    # Mode (Execute's), whose flags only RNA reads: fall back there.
+    sel = np.zeros(len(me.edges), bool)
+    attr = me.attributes.get('.select_edge')
+    if attr is not None:
+        attr.data.foreach_get('value', sel)
+    else:
+        me.edges.foreach_get('select', sel)
+    no = np.array(plane_no, np.float64)
+    d = pos @ no - float(np.dot(np.array(plane_co, np.float64), no))
+    a, b = d[ev[:, 0]], d[ev[:, 1]]
+    crossing = ((a > dist) & (b < -dist)) | ((a < -dist) & (b > dist))
+    pick = crossing & sel
+    t = (a[pick] / (a[pick] - b[pick]))[:, None]
+    pa, pb = pos[ev[pick, 0]], pos[ev[pick, 1]]
+    crossings = (pa + t * (pb - pa)).tolist()
+    flat = (np.abs(a) <= dist) & (np.abs(b) <= dist)
+    p32 = pos.astype(np.float32)
+    existing = {_edge_key(p32[i], p32[j]) for i, j in ev[flat].tolist()}
+    scale = float(np.abs(pos).max()) if len(pos) else 1.0
+    return _plan(crossings, existing, face_mode, scale), arrays
+
+
+def split_plan_from_bmesh(bm, plane_co, plane_no, dist, face_mode):
+    """SplitPlan straight from a bmesh (a later mirrored plane, where no
+    Mesh mirrors the bmesh any more). O(edges) in Python - mirrors only."""
+    def side(v):
+        return (v.co - plane_co).dot(plane_no)
+
+    crossings, existing, scale = [], set(), 1.0
+    for e in bm.edges:
+        a, b = side(e.verts[0]), side(e.verts[1])
+        if abs(a) <= dist and abs(b) <= dist:
+            existing.add(_edge_key(e.verts[0].co, e.verts[1].co))
+        elif e.select and ((a > dist and b < -dist) or (a < -dist and b > dist)):
+            co_a, co_b = e.verts[0].co, e.verts[1].co
+            crossings.append(co_a + (co_b - co_a) * (a / (a - b)))
+            scale = max(scale, co_a.length)
+    return _plan(crossings, existing, face_mode, scale)
+
+
+def _inside_point(face):
+    """A point ON the face, whatever its shape: a hair inside the middle of
+    its first edge. The median centre lies outside a concave face (an
+    L-shaped n-gon), and any interior point of a twisted quad lies off the
+    baseline's triangulation if that split the quad along the other
+    diagonal (up to 3x the lookup tolerance on Suzanne) - in both cases the
+    lookup missed and a selection made during the preview was lost. The
+    edges are common to every triangulation, so next to one the surface is
+    the same whichever diagonal was chosen."""
+    loop = face.loops[0]
+    a, b = loop.vert.co, loop.link_loop_next.vert.co
+    edge = b - a
+    inward = face.normal.cross(edge)      # left of a counter-clockwise edge
+    if inward.length_squared == 0.0:
+        return face.calc_center_median()
+    return (a + b) * 0.5 + inward.normalized() * (edge.length * 0.01)
+
+
+def _source_face(face, bvh, snap, eps, exact):
+    """Index of the baseline face a preview face came from (itself, or the
+    face it is a split half of), or None. Several baseline faces can lie
+    within reach - coincident or touching parts (Suzanne's eyes) - and the
+    nearest one is then a coin toss: the one sharing the most vertex
+    positions wins, since a face's original corners never move."""
+    point = _inside_point(face)
+    near = bvh.find_nearest_range(point, eps)
+    if not near:
+        return None
+    if len(near) == 1:
+        return near[0][2]
+    corners = [v.co for v in face.verts]
+
+    def shared(index):
+        cos = [snap.vertices[i].co for i in snap.polygons[index].vertices]
+        return sum(1 for c in corners if any((c - o).length <= exact for o in cos))
+
+    return max(near, key=lambda hit: (shared(hit[2]), -hit[3]))[2]
+
+
 def _remap_selection_to_baseline(cache, bm, planes=None,
                                  clear_inner=False, clear_outer=False,
                                  selected_only=False) -> None:
@@ -63,8 +200,10 @@ def _remap_selection_to_baseline(cache, bm, planes=None,
     # as EMPTY. (preserve_hidden is assigned after the mapping below.)
 
     def hidden(co: Vector) -> bool:
-        if not preserve_hidden or not planes \
-                or not (clear_inner or clear_outer):
+        return preserve_hidden and hidden_raw(co)
+
+    def hidden_raw(co: Vector) -> bool:
+        if not planes or not (clear_inner or clear_outer):
             return False
         for p_co, p_no in planes:
             d = (co - p_co).dot(p_no)
@@ -77,25 +216,43 @@ def _remap_selection_to_baseline(cache, bm, planes=None,
     lo, hi = _snapshot_bounds(snap)
     eps = max((hi - lo).length * 1e-3, 1e-6)
 
+    face_mode = face_select_mode(bm)
+    exact = max((hi - lo).length * 1e-6, 1e-7)
     sel_faces = set()
     for f in bm.faces:
         if f.select:
-            hit = bvh.find_nearest(f.calc_center_median())
-            if hit is not None and hit[2] is not None and hit[3] <= eps:
-                sel_faces.add(hit[2])
+            source = _source_face(f, bvh, snap, eps, exact)
+            if source is not None:
+                sel_faces.add(source)
 
-    kd = KDTree(len(snap.vertices))
-    for i, v in enumerate(snap.vertices):
-        kd.insert(v.co, i)
-    kd.balance()
     sel_verts = set()
-    for v in bm.verts:
-        if v.select:
-            _co, i, dist = kd.find(v.co)
-            if i is not None and dist <= eps:
-                sel_verts.add(i)
+    if not face_mode:
+        # An original vertex is where it always was; a cut-loop vertex only
+        # NEAR one (dense mesh, plane on a vertex row) must not stand in for
+        # it - it left a stray column selected after leaving the tool.
+        kd = KDTree(len(snap.vertices))
+        for i, v in enumerate(snap.vertices):
+            kd.insert(v.co, i)
+        kd.balance()
+        for v in bm.verts:
+            if v.select:
+                _co, i, dist = kd.find(v.co)
+                if i is not None and dist <= exact:
+                    sel_verts.add(i)
 
-    preserve_hidden = selected_only and bool(sel_faces or sel_verts)
+    # What the preview hides (a Clear's side) the user cannot have changed:
+    # keep it while they ADDED to or trimmed the selection they could see
+    # (Shift+click, Ctrl+click: at least half of it is still selected) -
+    # not after a replace (plain click) or Deselect All, which drop most of
+    # it. Folds can merge several edits, so the intent is judged on the
+    # outcome, not on one click.
+    if selected_only:
+        preserve_hidden = bool(sel_faces or sel_verts)
+    else:
+        visible_before = [p.index for p in snap.polygons
+                          if p.select and not hidden_raw(Vector(p.center))]
+        kept = sum(1 for i in visible_before if i in sel_faces)
+        preserve_hidden = not visible_before or kept * 2 >= len(visible_before)
 
     n_faces = 0
     for p in snap.polygons:
@@ -113,8 +270,15 @@ def _remap_selection_to_baseline(cache, bm, planes=None,
         if v.select and hidden(Vector(v.co)):
             sel_verts.add(i)  # preserved cleared-side selection
     n_edges = 0
+    if face_mode:
+        # Face mode: edges come from the selected faces only - "both verts
+        # selected" also picked edges no selected face owns.
+        face_edges = {k for p in snap.polygons if p.select for k in p.edge_keys}
     for e in snap.edges:
-        e.select = (e.vertices[0] in sel_verts and e.vertices[1] in sel_verts)
+        if face_mode:
+            e.select = e.key in face_edges
+        else:
+            e.select = (e.vertices[0] in sel_verts and e.vertices[1] in sel_verts)
         n_edges += e.select
     for i, v in enumerate(snap.vertices):
         v.select = i in sel_verts
@@ -160,18 +324,59 @@ def clear_domain_side(bm, res_geom, plane_co, plane_no,
 
     doomed = [f for f in faces
               if f.is_valid and cleared(dist(f.calc_center_median()))]
+    # Edges of the cleared faces: after the delete, any of them still used
+    # only by HIDDEN faces (outside a visible-only domain) is re-hidden
+    # below, so a protected hidden part stays whole AND hidden instead of
+    # leaving stray visible boundary edges floating on the cleared side.
+    border = {e for f in doomed for e in f.edges}
     if doomed:
         bmesh.ops.delete(bm, geom=doomed, context='FACES_ONLY')
     doomed = [e for e in edges
               if e.is_valid and not e.link_faces
               and cleared(dist((e.verts[0].co + e.verts[1].co) * 0.5))]
+    # context='EDGES' also deletes every vertex left without edges - which
+    # took the ON-PLANE vertex of a plane that only touches a vertex (a
+    # snapped cube corner, a sphere pole), against the rule above. Execute
+    # then selected the freed vertex and raised, leaving the edit mesh
+    # EMPTY; native Bisect and the preview keep that vertex. Edges touching
+    # an on-plane vertex are removed one by one (edge only, verts live on),
+    # the rest in bulk; step 3 collects the isolated cleared verts.
+    touching = [e for e in doomed
+                if any(abs(dist(v.co)) <= eps for v in e.verts)]
+    if touching:
+        keep = set(touching)
+        doomed = [e for e in doomed if e not in keep]
     if doomed:
         bmesh.ops.delete(bm, geom=doomed, context='EDGES')
+    for e in touching:
+        if e.is_valid:
+            bm.edges.remove(e)
     doomed = [v for v in verts
               if v.is_valid and not v.link_faces and not v.link_edges
               and cleared(dist(v.co))]
     if doomed:
         bmesh.ops.delete(bm, geom=doomed, context='VERTS')
+    _rehide_orphaned_border(border)
+
+
+def _rehide_orphaned_border(edges) -> None:
+    """Blender's hide invariant around a face-granular clear: an element used
+    only by hidden faces is itself hidden (and unselected). Without it the
+    hidden part's former border with the cleared visible faces stays visible.
+    Touches only the given edges and their verts - O(cleared border)."""
+    verts = set()
+    for e in edges:
+        if not e.is_valid or e.hide:
+            continue
+        faces = e.link_faces
+        if faces and all(f.hide for f in faces):
+            e.select = False
+            e.hide = True
+            verts.update(e.verts)
+    for v in verts:
+        if v.is_valid and not v.hide and v.link_edges and all(e.hide for e in v.link_edges):
+            v.select = False
+            v.hide = True
 
 
 def reselect_cut_domain(*geom_lists) -> None:
@@ -192,69 +397,70 @@ def reselect_cut_domain(*geom_lists) -> None:
                 elem.select = True
 
 
-def repair_split_selection(geom_cut, bvh=None, snap_polygons=None) -> None:
-    """Make face/edge splits SELECTION-PRESERVING along the cut loop.
+def repair_split_selection(bm, geom_cut, plan, bvh=None, snap_polygons=None,
+                           flush: bool = True) -> None:
+    """Keep the user's selection across the split (shared by both paths).
 
-    bisect_plane does not copy the select flag to the NEW half of a split
-    face/edge, so cutting through a selected region left a half-deselected
-    band along the loop. Repair by sibling agreement:
+    bisect_plane leaves the new halves of split faces and edges unselected,
+    and in Vertex select mode its flush then drops the selection of every
+    split face. The selection is rebuilt from the uncut mesh (`plan`):
 
-      * the two faces sharing a CUT EDGE are halves of ONE source face (a
-        cut edge lies inside its source face) - if they disagree, the source
-        was selected (an unselected source leaves both halves unselected),
-        so select both;
-      * a CUT VERT splits one source edge - select it (and the sub-edges)
-        when its non-loop neighbors are all selected, i.e. the region around
-        the split was selected.
+      * a NEW cut vertex is selected exactly when the edge it split was;
+      * Face mode: the two faces on a new cut edge are halves of ONE source
+        face, so if they disagree the source was selected - select both.
+        With a Clear the bisect may delete the selected half and keep a new,
+        unselected one: then the snapshot BVH (bvh + snap_polygons) recovers
+        the source face's flag. Edges that already lay on the plane split no
+        face and are skipped (they once selected the whole ring below a
+        selected hemisphere);
+      * Vertex/Edge mode: the verts are the truth - Blender's select-mode
+        flush derives edges and faces, as for any edit.
 
-    ONE-SIDED CASE (bvh + snap_polygons given): with Clear Inner/Outer the
-    bisect deletes one half INTERNALLY, and it reuses the original face for
-    an ARBITRARY side - when the original fell on the cleared side, the
-    kept half is a brand-new unselected face with no sibling left to
-    compare (the sometimes-deselects-under-Clear bug: ~40% of a selected
-    band lost, whichever halves happened to be new). The kept half's center
-    lies ON its source face, so the snapshot BVH recovers the source's
-    stored selection.
-
-    O(loop length), not O(mesh). Selected-Only mode doesn't need this - the
-    whole surviving domain is re-selected by reselect_cut_domain.
+    O(loop length) plus one flush - flush=False leaves that to a caller
+    that flushes again before anything reads the edge and face flags.
     """
     cut_edges = {g for g in geom_cut if isinstance(g, bmesh.types.BMEdge)}
-    for e in cut_edges:
-        if not e.is_valid:
-            continue
+    if plan.points is not None:
+        for g in geom_cut:
+            if not isinstance(g, bmesh.types.BMVert) or not g.is_valid:
+                continue
+            _co, index, dist = plan.points.find(g.co)
+            if index is None or dist > plan.tol:
+                continue
+            g.select = True
+            for e in g.link_edges:
+                if e not in cut_edges:
+                    e.select = True
+    if not plan.face_mode:
+        if flush:
+            bm.select_flush_mode()
+        return
+    new_edges = [e for e in cut_edges if e.is_valid
+                 and _edge_key(e.verts[0].co, e.verts[1].co) not in plan.existing]
+    for e in new_edges:
         faces = e.link_faces
         if len(faces) == 2 and faces[0].select != faces[1].select:
             faces[0].select_set(True)
             faces[1].select_set(True)
     if bvh is not None and snap_polygons is not None:
-        for e in cut_edges:
-            if not e.is_valid:
-                continue
+        for e in new_edges:
             faces = e.link_faces
             if len(faces) == 1 and not faces[0].select:
                 hit = bvh.find_nearest(faces[0].calc_center_median())
                 if (hit is not None and hit[2] is not None
                         and snap_polygons[hit[2]].select):
                     faces[0].select_set(True)
-    for g in geom_cut:
-        if not isinstance(g, bmesh.types.BMVert) or not g.is_valid:
-            continue
-        # A cut vert splits a source edge into halves; bisect keeps the source's
-        # select flag on ONE half. SIBLING agreement: select the other half (and
-        # the vert) only when a half is ALREADY selected - i.e. the source edge
-        # was selected. Keying off the halves, NOT off the neighbour verts being
-        # selected, is what stops the segment BETWEEN two accumulated cut loops
-        # from selecting: its endpoints are selected cut-verts, but the segment
-        # itself was never a selected source edge (that was the over-select bug).
-        split_edges = [e for e in g.link_edges if e not in cut_edges]
-        if any(e.select for e in split_edges):
-            g.select_set(True)
-            for e in split_edges:
-                e.select_set(True)
+    # A selected face along the cut selects its new edges too: when the
+    # bisect keeps the ORIGINAL face for the selected half, nothing above
+    # touched it, and its new cut edge stayed unselected.
+    for e in cut_edges:
+        if e.is_valid:
+            for f in e.link_faces:
+                if f.select:
+                    f.select_set(True)
 
 
-def apply_cut_selection(geom_cut, *, select: bool) -> None:
+def apply_cut_selection(geom_cut, *, select: bool, bm=None) -> None:
     """ADD the freshly cut loop to the selection as EDGES ONLY (shared by
     live preview + Execute). select=False leaves the selection untouched.
 
@@ -273,13 +479,19 @@ def apply_cut_selection(geom_cut, *, select: bool) -> None:
     """
     if not select:
         return
+    # A Clear that runs after the bisect (Execute, Selected Only, meshes
+    # with hidden parts) can free elements of geom_cut - never touch those.
     selected_any = False
     for g in geom_cut:
-        if isinstance(g, bmesh.types.BMEdge):
+        if isinstance(g, bmesh.types.BMEdge) and g.is_valid:
             g.select_set(True)
             selected_any = True
     if not selected_any:
         # Degenerate cut (plane grazes verts only) - select the cut verts
         for g in geom_cut:
-            if isinstance(g, bmesh.types.BMVert):
+            if isinstance(g, bmesh.types.BMVert) and g.is_valid:
                 g.select_set(True)
+    if bm is not None and not face_select_mode(bm):
+        # Vertex/Edge mode: a face whose verts are all selected IS selected
+        # there (a fill cap ringed by the loop) - Blender's own flush.
+        bm.select_flush_mode()

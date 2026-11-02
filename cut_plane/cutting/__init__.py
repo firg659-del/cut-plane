@@ -26,6 +26,7 @@ Package layout (one module per concern, dependency-ordered):
     invariants   self-instrumentation over the session state
     snap_support snapshot BVH + baseline queries for snapping and the UI
     selection    remap / clear / reselect / repair / loop-select semantics
+    dialogs      is an operator's file browser open (the preview pauses)
     preview      the per-frame apply orchestrator + restore + adoption
     watchdog     tool-active POST_VIEW watchdog + deferred sync timer
     handlers     save/load/undo/redo handlers, orphan purge, crash recovery
@@ -36,6 +37,7 @@ This __init__ is the subsystem's single import surface: every name callers
 """
 
 from . import (  # noqa: F401
+    dialogs,
     handlers,
     invariants,
     plane,
@@ -70,11 +72,12 @@ from .plane import (  # noqa: F401
     _mirror_pivot_key,
     _mirror_pivot_local,
     _mirrored_planes_local,
-    _mirror_reflection_world,
-    _mirror_world_frame,
+    _mirror_reflections_world,
     _mirrored_planes_world,
     _plane_key,
+    fill_applies,
     get_plane_world,
+    reflect_plane,
     plane_to_object_local,
 )
 from .preview import (  # noqa: F401
@@ -87,6 +90,10 @@ from .preview import (  # noqa: F401
     _sync_baseline,
     _warn_preview_blocked,
     adopt_committed_baseline,
+    begin_owned_input,
+    bmesh_has_hidden,
+    end_owned_input,
+    fill_cut,
     live_preview_blocker,
     refresh_live_preview,
     restore_live_cut,
@@ -97,8 +104,11 @@ from .selection import (  # noqa: F401
     _remap_selection_to_baseline,
     apply_cut_selection,
     clear_domain_side,
+    face_select_mode,
     repair_split_selection,
     reselect_cut_domain,
+    split_plan_from_bmesh,
+    split_plan_from_mesh,
 )
 from .snap_support import (  # noqa: F401
     _get_or_build_snapshot_bvh,
@@ -140,7 +150,7 @@ from .watchdog import (  # noqa: F401
     unregister_live_cut_watchdog,
 )
 
-# The five REASSIGNED scalars cannot be re-exported by name: a `from`-import
+# The seven REASSIGNED scalars cannot be re-exported by name: a `from`-import
 # would bind this module to their import-time values while the owning module
 # rebinds its own attribute (state's module docstring documents the rule).
 # PEP 562 module __getattr__ forwards reads to the live attribute instead, so
@@ -151,6 +161,8 @@ _FORWARDED_SCALARS = {
     "_op_pending": state,
     "_pending_action": state,
     "_last_tool_active": state,
+    "_input_owned": state,
+    "_dialog_resume": state,
     "_restore_after_save": handlers,
     "_readopt_after_save": handlers,
 }

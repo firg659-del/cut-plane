@@ -105,7 +105,7 @@ check("exactly parallel ray is rejected (old fallback teleported to the "
 # --- 2. PLANE squares: horizon and grazing guards ---------------------------
 shim = types.SimpleNamespace(start_pos_world=anchor)
 _ray = [None]
-shim._mouse_ray = lambda ctx, ev: _ray[0]
+shim._mouse_ray = lambda ctx, ev, mouse=None: _ray[0]
 intersect = move_mod.CutPlaneMoveCenterOperator._mouse_plane_intersect
 normal = Vector((0.0, 0.0, 1.0))  # constraint plane z=0, camera at z=5
 

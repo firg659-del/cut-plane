@@ -11,7 +11,7 @@ Requires **Blender 4.5 or newer** (tested through 5.1).
 ## Install
 
 1. In Blender: **Edit → Preferences → Get Extensions → Install from Disk…**
-   and pick the downloaded `cut_plane-1.1.0.zip`
+   and pick the downloaded `cut_plane-1.2.0.zip`
    (or simply drag the zip into the Blender window).
 2. That's it — the extension enables itself.
 
@@ -54,6 +54,7 @@ Move and rotate change the cut; scale is a viewing aid.
 | `Ctrl` (during a drag) | Toggle snapping |
 | click / `Enter` | Confirm the drag · `Esc` or right-click cancels |
 | `Alt+G` / `Alt+R` / `Alt+S` | Clear the plane's location / rotation / scale (the **Reset** button clears all three) |
+| `Shift+Z` / `Shift+Y` / `Shift+X` | Lay the plane in the world XY / XZ / YZ plane, keeping its position - named like a native transform's plane keys (the axis left out) |
 | `Enter` | Execute the cut |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo (see below) |
 
@@ -69,7 +70,11 @@ you can limit snapping to Move / Rotate / Scale individually.
 
 ## Cut options
 
-- **Fill** — caps the cut with faces (same result native Bisect gives).
+- **Fill** — caps the cut on the side you keep, so it works together with
+  Clear Inner or Clear Outer (it is dimmed otherwise: with both sides kept
+  there is no open edge to close, and a cap would only add a hidden wall
+  inside the mesh). Where a cap borders faces of different materials it
+  takes the most common one.
 - **Clear Inner / Clear Outer** — delete one side of the cut.
 - **Mirror X / Y / Z** — cut with mirrored copies of the plane at once,
   reflected through the **Anchor**; the eye icon shows or hides the ghost
@@ -104,14 +109,33 @@ Your bindings survive addon updates.
   read from the active object, the one the plane is placed from.
 - A fresh plane starts **on** the Anchor, so mirroring adds nothing until
   you move the plane off it.
-- While the tool is active, `Alt+R` and `Alt+S` override native *Spin*
-  and *Shrink/Fatten*. Rebind them in the preferences if you rely on
-  those — everywhere outside the tool they're untouched.
+- While the tool is active, `Alt+R`, `Alt+S` and `Shift+Z` override
+  native *Spin*, *Shrink/Fatten* and the wireframe toggle. Rebind them in
+  the preferences if you rely on those — everywhere outside the tool
+  they're untouched.
+- **Cut loops add up** with Select Cut Loop on, so you can bevel every
+  cut of a session at once. In Vertex select mode, two loops that end up
+  side by side also select the edges and faces between them (Blender
+  derives those from the vertices); switch to Edge select mode before
+  cutting to keep exactly the loops.
 - Meshes with **shape keys** don't show the live preview (a header
   warning explains); the same applies above a very high polygon count,
   where previewing every mouse move would be too slow.
 - The in-drag keys (`X/Y/Z`, `Shift`, `Ctrl`, numbers) are fixed; only
   the tool shortcuts are rebindable.
+- **Editing while a preview shows:** if you change the mesh with
+  anything else (a move from the Mesh menu, a material, UVs, an
+  extrude), the tool keeps the mesh exactly as you see it, so the
+  previewed cut becomes part of it. Two exceptions are undone by the
+  next plane move or when you leave the tool: hiding or revealing, and
+  vertex-group weights. Do those before you activate the tool.
+- Hidden geometry is never cut or cleared, like native Bisect.
+- **Exports:** while a file browser is open (File > Export, Import,
+  Save As) the preview pauses, so an export never contains an
+  uncommitted cut. File > Export All Collections, a collection's Export
+  button and scripts export what the viewport shows: Execute the cut
+  or leave the tool first. A render (F12) from Edit Mode shows the
+  preview too.
 
 ## Support
 

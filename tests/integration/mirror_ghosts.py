@@ -28,7 +28,7 @@ import sys
 import bpy
 from math import radians
 
-from mathutils import Matrix, Vector
+from mathutils import Matrix
 
 ADDON = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if ADDON not in sys.path:
